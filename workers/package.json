@@ -1,0 +1,37 @@
+{
+  "name": "marketloop-workers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
+    "cf-typegen": "wrangler types",
+    "seed": "tsx scripts/seed.ts",
+    "test": "npm run test:auth && npm run test:firestore && npm run test:presign && npm run test:products && npm run test:bids && npm run test:paypack && npm run test:pesapal && npm run test:orders && npm run test:admin",
+    "test:auth": "tsx scripts/test-auth.ts",
+    "test:firestore": "tsx scripts/test-firestore.ts",
+    "test:presign": "tsx scripts/test-presign.ts",
+    "test:products": "tsx scripts/test-products.ts",
+    "test:bids": "tsx scripts/test-bids.ts",
+    "test:paypack": "tsx scripts/test-paypack.ts",
+    "test:pesapal": "tsx scripts/test-pesapal.ts",
+    "test:orders": "tsx scripts/test-orders.ts",
+    "test:admin": "tsx scripts/test-admin.ts"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260811.1",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260811.1": true
+  }
+}

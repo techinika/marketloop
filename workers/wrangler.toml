@@ -1,0 +1,33 @@
+name = "marketloop-workers"
+main = "src/index.ts"
+compatibility_date = "2026-08-13"
+
+# --- Cron: auto-refund orders still "held" past their 5-day delivery deadline ---
+[triggers]
+crons = ["0 * * * *"]
+
+# --- R2: product images / videos ---
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "marketloop-images"
+
+# --- Vars (non-secret) ---
+[vars]
+FIREBASE_PROJECT_ID = "marketloop-rw"
+R2_ACCOUNT_ID = ""
+R2_BUCKET_NAME = "marketloop-images"
+FRONTEND_URL = "http://localhost:3000"
+
+# --- Secrets ---
+# Never commit secret values. Set them via `wrangler secret put <NAME>` for
+# deployed environments, or locally in `.dev.vars` (see `.dev.vars.example`).
+#
+# FIREBASE_CLIENT_EMAIL
+# FIREBASE_PRIVATE_KEY
+# R2_ACCESS_KEY_ID
+# R2_SECRET_ACCESS_KEY
+# PAYPACK_CLIENT_ID
+# PAYPACK_CLIENT_SECRET
+# PAYPACK_WEBHOOK_SECRET
+# PESAPAL_CONSUMER_KEY
+# PESAPAL_CONSUMER_SECRET

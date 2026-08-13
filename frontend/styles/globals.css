@@ -1,0 +1,332 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+ * MarketLoop design tokens — single source of truth.
+ * Backgrounds stay light/off-white; the emerald accent is used sparingly for
+ * primary actions, active states and links only. Three text tiers:
+ *   foreground (#18181B) = headings / primary
+ *   secondary (#52525B) = body / supporting copy
+ *   muted (#A1A1AA)      = meta / tertiary
+ * ------------------------------------------------------------------------- */
+@theme {
+  /* Surfaces */
+  --color-background: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f4f4f5;
+
+  /* Text tiers */
+  --color-foreground: #18181b;
+  --color-secondary: #52525b;
+  --color-muted: #a1a1aa;
+
+  /* Borders */
+  --color-border: #e4e4e7;
+
+  /* Primary accent (emerald) — used sparingly */
+  --color-accent: #10b981;
+  --color-accent-strong: #059669;
+  --color-accent-soft: #ecfdf5;
+
+  /* Semantic status tones (soft backgrounds, never saturated) */
+  --color-success: #16a34a;
+  --color-success-soft: #dcfce7;
+  --color-warning: #b45309;
+  --color-warning-soft: #fef3c7;
+  --color-danger: #dc2626;
+  --color-danger-soft: #fee2e2;
+  --color-info: #2563eb;
+  --color-info-soft: #dbeafe;
+
+  /* Type */
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* Radius */
+  --radius-card: 1rem; /* rounded-2xl */
+  --radius-input: 0.75rem; /* rounded-xl */
+
+  /* Shadows: soft by default, lifted only on hover */
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 12px rgb(0 0 0 / 0.05);
+  --shadow-lifted: 0 2px 4px rgb(0 0 0 / 0.05), 0 12px 24px rgb(0 0 0 / 0.08);
+}
+
+/* ---------------------------------------------------------------------------
+ * Keyframes (animations used by utilities below)
+ * ------------------------------------------------------------------------- */
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Layout
+ * ------------------------------------------------------------------------- */
+
+/* Standard page container: max-w-6xl, centered, consistent gutters. */
+@utility container-page {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 72rem;
+  padding-inline: 1rem;
+  @media (min-width: 640px) {
+    padding-inline: 1.5rem;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Cards
+ * ------------------------------------------------------------------------- */
+
+/* Static content card — 1px border, soft shadow, generous padding handled by caller. */
+@utility card {
+  border-radius: var(--radius-card);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-soft);
+}
+
+/* Interactive card — hover lifts + scales slightly (150ms, never bouncy). */
+@utility card-interactive {
+  border-radius: var(--radius-card);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-soft);
+  transition:
+    box-shadow 150ms ease,
+    transform 150ms ease,
+    border-color 150ms ease;
+
+  &:hover {
+    box-shadow: var(--shadow-lifted);
+    transform: scale(1.01);
+  }
+
+  &:active {
+    transform: scale(1);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Buttons — one consistent height (h-10), radius, and padding everywhere.
+ * ------------------------------------------------------------------------- */
+@utility btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 2.5rem;
+  padding-inline: 1.25rem;
+  border-radius: var(--radius-input);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease,
+    transform 150ms ease;
+
+  &:disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+@utility btn-primary {
+  background: var(--color-accent);
+  color: #fff;
+
+  &:hover {
+    background: var(--color-accent-strong);
+  }
+}
+
+@utility btn-secondary {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-foreground);
+
+  &:hover {
+    background: var(--color-surface-muted);
+  }
+}
+
+@utility btn-ghost {
+  background: transparent;
+  color: var(--color-secondary);
+
+  &:hover {
+    background: var(--color-surface-muted);
+    color: var(--color-foreground);
+  }
+}
+
+@utility btn-danger-ghost {
+  background: transparent;
+  color: var(--color-danger);
+
+  &:hover {
+    background: var(--color-danger-soft);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Forms — shared field base + labels. Focus uses an accent ring, not browser blue.
+ * ------------------------------------------------------------------------- */
+@utility field {
+  border-radius: var(--radius-input);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  color: var(--color-foreground);
+  outline: none;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+
+  &::placeholder {
+    color: var(--color-muted);
+  }
+
+  &:focus {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+}
+
+@utility field-label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-foreground);
+}
+
+/* ---------------------------------------------------------------------------
+ * Badges — small pills with soft semantic tints (never harsh/saturated).
+ * ------------------------------------------------------------------------- */
+@utility badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 9999px;
+  padding: 0.125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+@utility badge-neutral {
+  background: var(--color-surface-muted);
+  color: var(--color-secondary);
+}
+
+@utility badge-accent {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+}
+
+@utility badge-success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+@utility badge-warning {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+@utility badge-danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+@utility badge-info {
+  background: var(--color-info-soft);
+  color: var(--color-info);
+}
+
+/* ---------------------------------------------------------------------------
+ * Loading skeletons — shimmer blocks that mirror the content they replace.
+ * ------------------------------------------------------------------------- */
+@utility skeleton {
+  border-radius: 0.5rem;
+  background:
+    linear-gradient(90deg, #f4f4f5 25%, #e9e9eb 37%, #f4f4f5 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+
+/* ---------------------------------------------------------------------------
+ * Toasts + micro-entrances
+ * ------------------------------------------------------------------------- */
+@utility toast-enter {
+  animation: toast-in 180ms ease both;
+}
+
+@utility toast-leave {
+  animation: toast-out 180ms ease both;
+}
+
+@utility fade-in-up {
+  animation: fade-in-up 200ms ease both;
+}
+
+/* ---------------------------------------------------------------------------
+ * Base
+ * ------------------------------------------------------------------------- */
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-weight: 400;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
