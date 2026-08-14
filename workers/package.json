@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json --noEmit",
     "cf-typegen": "wrangler types",
     "seed": "tsx scripts/seed.ts",
-    "test": "npm run test:auth && npm run test:firestore && npm run test:presign && npm run test:products && npm run test:bids && npm run test:paypack && npm run test:pesapal && npm run test:orders && npm run test:admin",
+    "test": "npm run test:auth && npm run test:firestore && npm run test:presign && npm run test:products && npm run test:bids && npm run test:paypack && npm run test:pesapal && npm run test:orders && npm run test:admin && npm run test:verifications",
     "test:auth": "tsx scripts/test-auth.ts",
     "test:firestore": "tsx scripts/test-firestore.ts",
     "test:presign": "tsx scripts/test-presign.ts",
@@ -18,7 +18,8 @@
     "test:paypack": "tsx scripts/test-paypack.ts",
     "test:pesapal": "tsx scripts/test-pesapal.ts",
     "test:orders": "tsx scripts/test-orders.ts",
-    "test:admin": "tsx scripts/test-admin.ts"
+    "test:admin": "tsx scripts/test-admin.ts",
+    "test:verifications": "tsx scripts/test-verifications.ts"
   },
   "dependencies": {
     "hono": "^4.6.0"

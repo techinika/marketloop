@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import type { User as FirebaseUser } from "firebase/auth";
 
-import { formatPrice, mediaUrl } from "@/lib/api";
+import { formatPrice, mediaUrl } from "@/lib/publicApi";
 import { observeAuthState } from "@/lib/firebase";
 import {
   fetchMyBid,
@@ -20,6 +21,7 @@ import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/Toast";
 import { ProductDetailSkeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { RatingBadge } from "@/components/ui/Rating";
 
 const STATUS_BADGE: Record<ProductStatus, { label: string; cls: string }> = {
   active: { label: "Active", cls: "badge-success" },
@@ -28,19 +30,27 @@ const STATUS_BADGE: Record<ProductStatus, { label: string; cls: string }> = {
   removed: { label: "Removed", cls: "badge-neutral" },
 };
 
-export function ProductDetail() {
+export function ProductDetail({
+  initial = null,
+}: {
+  /** Server-rendered product data; the client skips its initial fetch when present. */
+  initial?: { productDetail: ProductDetailData; bidSummary: BidSummary | null } | null;
+}) {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
   const { toast } = useToast();
+  const hydrated = useRef(false);
 
-  const [data, setData] = useState<ProductDetailData | null>(null);
-  const [summary, setSummary] = useState<BidSummary | null>(null);
+  const [data, setData] = useState<ProductDetailData | null>(initial?.productDetail ?? null);
+  const [summary, setSummary] = useState<BidSummary | null>(initial?.bidSummary ?? null);
   const [myBid, setMyBid] = useState<Bid | null>(null);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [selectedImage, setSelectedImage] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState(
+    initial?.bidSummary?.highestBid ? String(initial.bidSummary.highestBid) : "",
+  );
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -52,6 +62,12 @@ export function ProductDetail() {
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
+      // Server already rendered this product — skip the duplicate fetch.
+      if (!hydrated.current && initial?.productDetail) {
+        hydrated.current = true;
+        return;
+      }
+      hydrated.current = true;
       setError(null);
       setData(null);
       try {
@@ -77,7 +93,7 @@ export function ProductDetail() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, initial]);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,16 +206,18 @@ export function ProductDetail() {
       <div className="grid gap-8 lg:grid-cols-2">
         {/* Gallery */}
         <div className="fade-in-up">
-          <div className="card overflow-hidden">
+          <div className="relative aspect-square w-full overflow-hidden card">
             {image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              <Image
                 src={mediaUrl(image)}
                 alt={product.title}
-                className="aspect-square w-full object-cover"
+                fill
+                sizes="(max-width: 1024px) 100vw, 50vw"
+                priority
+                className="object-cover"
               />
             ) : (
-              <div className="flex aspect-square w-full items-center justify-center text-secondary">
+              <div className="flex size-full items-center justify-center text-secondary">
                 No image
               </div>
             )}
@@ -211,13 +229,13 @@ export function ProductDetail() {
                   key={key}
                   type="button"
                   onClick={() => setSelectedImage(index)}
+                  aria-label={`View image ${index + 1}`}
                   className={cn(
-                    "shrink-0 overflow-hidden rounded-card border-2 transition-colors",
+                    "relative shrink-0 overflow-hidden rounded-card border-2 transition-colors",
                     index === selectedImage ? "border-accent" : "border-border opacity-70 hover:opacity-100",
                   )}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={mediaUrl(key)} alt="" className="size-16 object-cover" />
+                  <Image src={mediaUrl(key)} alt="" width={64} height={64} className="size-16 object-cover" />
                 </button>
               ))}
             </div>
@@ -409,7 +427,20 @@ export function ProductDetail() {
             )}
             <div>
               <p className="text-sm font-medium text-foreground">{seller.name}</p>
-              <p className="text-xs text-muted">Seller</p>
+              <RatingBadge avgRating={seller.avgRating} ratingCount={seller.ratingCount} className="mt-1" />
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <p className="text-xs text-muted">Seller</p>
+                {seller.verificationStatus === "verified" && (
+                  <span className="badge badge-success" title="Identity document approved">
+                    Verified
+                  </span>
+                )}
+                {seller.phoneVerified && (
+                  <span className="badge badge-neutral" title="Phone number confirmed by OTP">
+                    Phone verified
+                  </span>
+                )}
+              </div>
             </div>
           </section>
         </div>

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { formatPrice } from "@/lib/api";
 import { observeAuthState, signInWithGoogle } from "@/lib/firebase";
 import { createProduct } from "@/lib/products";
-import { contentTypeForFile, presignUploads, uploadToPresignedUrl } from "@/lib/upload";
+import { contentTypeForFile, prepareImageFile, presignUploads, uploadToPresignedUrl } from "@/lib/upload";
 import { CATEGORIES, type Currency, type DeliveryFeePayer, type Product } from "@/types";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/Toast";
@@ -100,14 +100,19 @@ export function SellForm() {
     }
   };
 
-  const addImageFiles = (fileList: FileList | File[]) => {
-    const incoming = Array.from(fileList).filter(
-      (file) => IMAGE_MIME.has(file.type) && file.size <= MAX_IMAGE_BYTES,
-    );
+  const addImageFiles = async (fileList: FileList | File[]) => {
+    setError(null);
+    const incoming = Array.from(fileList).filter((file) => IMAGE_MIME.has(file.type));
     if (incoming.length === 0) return;
+    // Downscale/compress each image so phone photos upload fast and stay under
+    // the server's 5MB cap even when the source file is much larger.
+    const prepared = (await Promise.all(incoming.map((file) => prepareImageFile(file)))).filter(
+      (file) => file.size <= MAX_IMAGE_BYTES,
+    );
+    if (prepared.length === 0) return;
     setImages((prev) => {
       const room = MAX_IMAGES - prev.length;
-      const accepted = incoming.slice(0, room).map((file) => ({
+      const accepted = prepared.slice(0, room).map((file) => ({
         id: crypto.randomUUID(),
         file,
         previewUrl: URL.createObjectURL(file),

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 
+import { httpError } from "../lib/http";
 import type { AppEnv } from "../types";
 
 export const mediaRoutes = new Hono<AppEnv>();
@@ -12,10 +13,10 @@ export const mediaRoutes = new Hono<AppEnv>();
  */
 mediaRoutes.get("/:key{.*}", async (c) => {
   const key = c.req.param("key");
-  if (!key) return c.json({ error: "Missing key" }, 400);
+  if (!key) return httpError(c, 400, "Missing key");
 
   const object = await c.env.IMAGES.get(key);
-  if (!object) return c.json({ error: "Not found" }, 404);
+  if (!object) return httpError(c, 404, "Not found");
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);

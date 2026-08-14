@@ -74,11 +74,17 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     ? (JSON.parse(String(init?.body)) as {
         fields?: Record<string, FirestoreField>;
         name?: string;
+        documents?: string[];
+        newTransaction?: unknown;
         structuredQuery?: {
           from: Array<{ collectionId: string }>;
           where?: {
             fieldFilter?: unknown;
-            compositeFilter?: { filters: Array<{ fieldFilter: { field: { fieldPath: string }; value: FirestoreField } }> };
+            compositeFilter?: {
+              filters: Array<{
+                fieldFilter: { field: { fieldPath: string }; op?: string; value: FirestoreField };
+              }>;
+            };
           };
           orderBy?: Array<{ field: { fieldPath: string }; direction: string }>;
           limit?: number;
@@ -90,22 +96,52 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
   if (method === "POST" && rest.endsWith(":runQuery")) {
     const collectionId = rest.slice(0, -":runQuery".length);
     const q = body?.structuredQuery;
-    const filters: Array<{ fieldPath: string; value: FirestoreField }> = [];
+    const filters: Array<{ fieldPath: string; op: string; value: FirestoreField }> = [];
     if (q?.where) {
       if ("fieldFilter" in q.where && q.where.fieldFilter) {
-        const ff = q.where.fieldFilter as { field: { fieldPath: string }; value: FirestoreField };
-        filters.push({ fieldPath: ff.field.fieldPath, value: ff.value });
+        const ff = q.where.fieldFilter as { field: { fieldPath: string }; op?: string; value: FirestoreField };
+        filters.push({ fieldPath: ff.field.fieldPath, op: ff.op ?? "EQUAL", value: ff.value });
       }
       if ("compositeFilter" in q.where && q.where.compositeFilter) {
         for (const f of q.where.compositeFilter.filters) {
-          filters.push({ fieldPath: f.fieldFilter.field.fieldPath, value: f.fieldFilter.value });
+          filters.push({
+            fieldPath: f.fieldFilter.field.fieldPath,
+            op: f.fieldFilter.op ?? "EQUAL",
+            value: f.fieldFilter.value,
+          });
         }
       }
     }
     let entries = [...store.entries()].filter(([key]) => key.startsWith(`${collectionId}/`));
-    for (const { fieldPath, value } of filters) {
-      const want = JSON.stringify(decodeValue(value));
-      entries = entries.filter(([, doc]) => JSON.stringify(decodeValue(doc.fields[fieldPath]!)) === want);
+    for (const { fieldPath, op, value } of filters) {
+      const want = decodeValue(value) as unknown;
+      entries = entries.filter(([, doc]) => {
+        const got = decodeValue(doc.fields[fieldPath]!) as unknown;
+        switch (op) {
+          case "EQUAL":
+            return JSON.stringify(got) === JSON.stringify(want);
+          case "NOT_EQUAL":
+            return JSON.stringify(got) !== JSON.stringify(want);
+          case "LESS_THAN":
+            return typeof got === "number" && typeof want === "number" && got < want;
+          case "LESS_THAN_OR_EQUAL":
+            return typeof got === "number" && typeof want === "number" && got <= want;
+          case "GREATER_THAN":
+            return typeof got === "number" && typeof want === "number" && got > want;
+          case "GREATER_THAN_OR_EQUAL":
+            return typeof got === "number" && typeof want === "number" && got >= want;
+          case "ARRAY_CONTAINS":
+            return Array.isArray(got) && Array.isArray(want) && got.some((g) => JSON.stringify(g) === JSON.stringify(want[0]));
+          case "ARRAY_CONTAINS_ANY": {
+            if (!Array.isArray(got) || !Array.isArray(want)) return false;
+            return want.some((w) => got.some((g) => JSON.stringify(g) === JSON.stringify(w)));
+          }
+          case "IN":
+            return Array.isArray(want) && want.some((w) => JSON.stringify(w) === JSON.stringify(got));
+          default:
+            return JSON.stringify(got) === JSON.stringify(want);
+        }
+      });
     }
     if (q?.orderBy?.length) {
       const { field: { fieldPath }, direction } = q.orderBy[0]!;
@@ -119,6 +155,16 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     if (q?.offset) entries = entries.slice(q.offset);
     if (q?.limit) entries = entries.slice(0, q.limit);
     return jsonResponse(entries.map(([path, doc]) => ({ document: docJson(path, doc), readTime: TIME })));
+  }
+
+  if (method === "POST" && rest.endsWith(":batchGet")) {
+    const documents = (body as { documents?: string[] }).documents ?? [];
+    const responses = documents.map((name) => {
+      const path = name.split("/documents/")[1] ?? name;
+      const doc = store.get(path);
+      return doc ? { found: docJson(path, doc), readTime: TIME } : { missing: name, readTime: TIME };
+    });
+    return jsonResponse({ responses });
   }
 
   if (method === "POST" && !rest.includes("/")) {
@@ -188,12 +234,68 @@ const fakeImages: R2Bucket = {
   },
 } as unknown as R2Bucket;
 
+// In-memory KV for phone-verification OTP codes.
+const kvStore = new Map<string, string>();
+const fakeKV: KVNamespace = {
+  get: async (key: string, type?: "text" | "json") => {
+    const value = kvStore.get(key);
+    if (value === undefined) return null;
+    return type === "json" ? (JSON.parse(value) as unknown) : value;
+  },
+  put: async (key: string, value: string | ArrayBuffer | ReadableStream) => {
+    kvStore.set(key, String(value));
+  },
+  delete: async (key: string) => {
+    kvStore.delete(key);
+  },
+} as unknown as KVNamespace;
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);
 }
 
 function bearer(token: string): RequestInit {
   return { headers: { Authorization: `Bearer ${token}` } };
+}
+
+async function createListing(
+  env: Record<string, unknown>,
+  sellerToken: string,
+  body: {
+    title: string;
+    category?: string;
+    priceAmount: number;
+    priceCurrency?: "RWF" | "USD";
+    isBiddingEnabled?: boolean;
+  },
+): Promise<Product & { id: string }> {
+  const res = await app.request(
+    "/products",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${sellerToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: body.title,
+        description: `Description for ${body.title}.`,
+        category: body.category ?? "Electronics",
+        priceAmount: body.priceAmount,
+        priceCurrency: body.priceCurrency ?? "RWF",
+        isNegotiable: false,
+        isBiddingEnabled: body.isBiddingEnabled ?? false,
+        conditionNote: "used",
+        images: ["uploads/seller-1/test.jpg"],
+        videoUrl: null,
+        deliveryFee: 0,
+        deliveryFeePayer: "seller",
+      }),
+    },
+    env,
+  );
+  if (res.status !== 201) {
+    const body = await res.text();
+    assert(false, `createListing failed (${res.status}): ${body}`);
+  }
+  return ((await res.json()) as { product: Product & { id: string } }).product;
 }
 
 async function main(): Promise<void> {
@@ -226,6 +328,7 @@ async function main(): Promise<void> {
   try {
     const env = {
       IMAGES: fakeImages,
+      OTP_KV: fakeKV,
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -401,6 +504,108 @@ async function main(): Promise<void> {
     const feedAfter = await app.request("/products", {}, env);
     const feedAfterBody = (await feedAfter.json()) as { products: Array<Product & { id: string }> };
     assert(feedAfterBody.products.length === 0, "removed product should not appear in feed");
+
+    // 7b. Search (titleKeywords via array-contains-any) + price range + sort.
+    const phone12Mini = await createListing(env, sellerToken, {
+      title: "iPhone 12 Mini",
+      category: "Phones & Tablets",
+      priceAmount: 400000,
+    });
+    const phone13Pro = await createListing(env, sellerToken, {
+      title: "iPhone 13 Pro",
+      category: "Phones & Tablets",
+      priceAmount: 1200000,
+    });
+    const galaxy = await createListing(env, sellerToken, {
+      title: "Samsung Galaxy S21",
+      priceAmount: 800000,
+    });
+
+    const searchRes = await app.request("/products?search=iphone", {}, env);
+    assert(searchRes.status === 200, `search should be 200, got ${searchRes.status}`);
+    let searchBody = (await searchRes.json()) as { products: Array<Product & { id: string }> };
+    const searchTitles = searchBody.products.map((p) => p.title).sort();
+    assert(
+      JSON.stringify(searchTitles) === JSON.stringify(["iPhone 12 Mini", "iPhone 13 Pro"]),
+      `search=iphone should match the two iPhones, got ${JSON.stringify(searchTitles)}`,
+    );
+
+    const galaxySearch = await app.request("/products?search=galaxy", {}, env);
+    const galaxyBody = (await galaxySearch.json()) as { products: Array<Product & { id: string }> };
+    assert(galaxyBody.products.length === 1 && galaxyBody.products[0]!.title === "Samsung Galaxy S21", "search=galaxy should match only the S21");
+
+    const noneSearch = await app.request("/products?search=zzzmissing", {}, env);
+    const noneBody = (await noneSearch.json()) as { products: Array<Product & { id: string }> };
+    assert(noneBody.products.length === 0, "search for a missing keyword should return nothing");
+
+    const phoneCased = await app.request("/products?search=IPHONE%2013", {}, env);
+    const phoneCasedBody = (await phoneCased.json()) as { products: Array<Product & { id: string }> };
+    assert(phoneCasedBody.products.length === 2, "search should be case-insensitive with multi-word terms");
+
+    // priceMin / priceMax.
+    const minOnly = await app.request("/products?priceMin=900000", {}, env);
+    const minBody = (await minOnly.json()) as { products: Array<Product & { id: string }> };
+    assert(minBody.products.length === 1 && minBody.products[0]!.title === "iPhone 13 Pro", "priceMin=900000 should leave only the 1.2M phone");
+
+    const maxOnly = await app.request("/products?priceMax=700000", {}, env);
+    const maxBody = (await maxOnly.json()) as { products: Array<Product & { id: string }> };
+    assert(maxBody.products.length === 1 && maxBody.products[0]!.title === "iPhone 12 Mini", "priceMax=700000 should leave only the 400k phone");
+
+    const range = await app.request("/products?priceMin=400000&priceMax=1000000", {}, env);
+    const rangeBody = (await range.json()) as { products: Array<Product & { id: string }> };
+    assert(rangeBody.products.length === 2, "range 400k-1M should match the Mini and the S21");
+
+    const badPrice = await app.request("/products?priceMin=abc", {}, env);
+    assert(badPrice.status === 400, `priceMin=abc should be 400, got ${badPrice.status}`);
+
+    const badOrder = await app.request("/products?priceMin=500&priceMax=100", {}, env);
+    assert(badOrder.status === 400, `priceMin>priceMax should be 400, got ${badOrder.status}`);
+
+    // sortBy.
+    const asc = await app.request("/products?sortBy=price_asc", {}, env);
+    const ascBody = (await asc.json()) as { products: Array<Product & { id: string }> };
+    assert(
+      JSON.stringify(ascBody.products.map((p) => p.title)) ===
+        JSON.stringify(["iPhone 12 Mini", "Samsung Galaxy S21", "iPhone 13 Pro"]),
+      `price_asc ordering wrong: ${JSON.stringify(ascBody.products.map((p) => p.title))}`,
+    );
+
+    const desc = await app.request("/products?sortBy=price_desc", {}, env);
+    const descBody = (await desc.json()) as { products: Array<Product & { id: string }> };
+    assert(
+      JSON.stringify(descBody.products.map((p) => p.title)) ===
+        JSON.stringify(["iPhone 13 Pro", "Samsung Galaxy S21", "iPhone 12 Mini"]),
+      `price_desc ordering wrong: ${JSON.stringify(descBody.products.map((p) => p.title))}`,
+    );
+
+    const badSort = await app.request("/products?sortBy=foo", {}, env);
+    assert(badSort.status === 400, `sortBy=foo should be 400, got ${badSort.status}`);
+
+    // Combined filters.
+    const combo = await app.request("/products?search=iphone&category=Electronics", {}, env);
+    const comboBody = (await combo.json()) as { products: Array<Product & { id: string }> };
+    assert(comboBody.products.length === 0, "search+category combo should be empty");
+
+    // Title patch recomputes keywords.
+    const rename = await app.request(
+      `/products/${phone13Pro.id}`,
+      { method: "PATCH", headers: { Authorization: `Bearer ${sellerToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ title: "iPhone 14 Pro Max" }) },
+      env,
+    );
+    assert(rename.status === 200, `rename should be 200, got ${rename.status}`);
+    const renamedSearch = await app.request("/products?search=14", {}, env);
+    const renamedBody = (await renamedSearch.json()) as { products: Array<Product & { id: string }> };
+    assert(renamedBody.products.length === 1 && renamedBody.products[0]!.title === "iPhone 14 Pro Max", "renamed product should match new title keyword");
+
+    // Cleanup: hide the extra products.
+    for (const product of [phone12Mini, phone13Pro, galaxy]) {
+      const rm = await app.request(
+        `/products/${product.id}`,
+        { method: "PATCH", headers: { Authorization: `Bearer ${sellerToken}`, "Content-Type": "application/json" }, body: JSON.stringify({ status: "removed" }) },
+        env,
+      );
+      assert(rm.status === 200, `cleanup removal failed for ${product.id}`);
+    }
 
     // 8. Presign: auth required.
     const presignNoAuth = await app.request("/uploads/presign", { method: "POST", body: JSON.stringify({ files: [] }) }, env);

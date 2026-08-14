@@ -1,36 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MarketLoop — frontend
 
-## Getting Started
+The web app for the MarketLoop peer-to-peer marketplace (see the repo-root
+`README.md` for the full project). Built with Next.js 16 (App Router), React 19,
+TypeScript and Tailwind CSS v4. Talks to the Cloudflare Workers API in
+`../workers`.
 
-First, run the development server:
+## Getting started
 
 ```bash
+npm install
+cp .env.example .env.local   # public web config, values pre-filled
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000. The Workers API is expected at `http://localhost:8787`
+(override via `NEXT_PUBLIC_API_URL`; see `lib/env.ts`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Script          | Purpose                                    |
+| --------------- | ------------------------------------------ |
+| `npm run dev`   | Development server (Turbopack)             |
+| `npm run build` | Production build (type-checks first)       |
+| `npm run start` | Serve the production build                 |
+| `npm run lint`  | ESLint (flat config)                       |
 
-## Learn More
+## How it's organized
 
-To learn more about Next.js, take a look at the following resources:
+- `app/` — App Router routes. Public pages (home, explore, product detail) are
+  server components that fetch with `lib/publicApi.ts`; authenticated pages
+  (dashboard, wallet, my-bids, sell, checkout, orders, admin) are gated by
+  route-level `layout.tsx` files and fetch with `lib/api.ts`.
+- `lib/` — API clients, environment config (`lib/env.ts`), shared filter state
+  (`lib/exploreFilters.ts`), Firebase auth glue, and the client-side image
+  downscaler (`lib/upload.ts` → `prepareImageFile`, caps photos at ~1600px and
+  re-encodes to WebP before presigned upload).
+- `components/` — shared UI (`ui/`), the authenticated header/menu, product /
+  bid / order components, and the seller forms.
+- `types/index.ts` — domain types. **Keep in sync with `../workers/src/models.ts`**
+  (both carry a matching header comment; there is deliberately no shared package).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Fetch split (server vs client)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`lib/publicApi.ts` exports `publicFetch`, `ApiError`, `mediaUrl`, `formatPrice`
+and is safe to import from server components. `lib/api.ts` re-exports those and
+adds `apiFetch`, which attaches the Firebase ID token
+(`Authorization: Bearer <idToken>`) and is client-only (it imports the Firebase
+client).
 
-## Deploy on Vercel
+## SEO & images
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `app/sitemap.ts` + `app/robots.ts` are generated from `lib/env.ts` (`siteUrl`).
+- `app/layout.tsx` sets `metadataBase`; each route exports `generateMetadata`
+  with canonical + OpenGraph tags; the product detail page emits Product
+  JSON-LD.
+- Images render through `next/image` (remote patterns for the API's `/media`
+  origin are configured in `next.config.ts`).
+- Loading/error boundaries exist per route (`loading.tsx` / `error.tsx`,
+  `not-found.tsx`, `global-error.tsx`).

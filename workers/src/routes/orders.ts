@@ -4,6 +4,15 @@ import type { Context } from "hono";
 import { refreshExpiredReservation } from "../lib/bids";
 import { releaseToSeller } from "../lib/escrow";
 import { firestoreFromEnv } from "../lib/firestore";
+import { httpError } from "../lib/http";
+import {
+  applyUserRating,
+  isMessageTextValid,
+  listMessages,
+  markOrderMessagesRead,
+  sendMessage,
+} from "../lib/messages";
+import { createNotification } from "../lib/notify";
 import { paypackFromEnv } from "../lib/paypack";
 import { pesapalFromEnv } from "../lib/pesapal";
 import { authMiddleware } from "../middleware/auth";
@@ -19,18 +28,35 @@ import type { AppEnv } from "../types";
 export const orderRoutes = new Hono<AppEnv>();
 
 const PHONE_RE = /^\+?\d{9,15}$/;
+const MESSAGE_TEXT_MAX = 2000;
+
+/** Resolves the caller's role on an order, or null if they're not a party. */
+function callerRole(order: Order, uid: string): "buyer" | "seller" | null {
+  if (order.buyerId === uid) return "buyer";
+  if (order.sellerId === uid) return "seller";
+  return null;
+}
 
 /** Seller/buyer public summary used in order responses. */
 interface PartySummary {
   uid: string;
   name: string;
   photoUrl: string | null;
+  /** Average rating + count, included only when the user has been rated. */
+  avgRating: number | null;
+  ratingCount: number;
 }
 
 function partySummary(user: User | null, fallbackUid: string): PartySummary {
   return user
-    ? { uid: user.uid, name: user.name, photoUrl: user.photoUrl }
-    : { uid: fallbackUid, name: "Unknown", photoUrl: null };
+    ? {
+        uid: user.uid,
+        name: user.name,
+        photoUrl: user.photoUrl,
+        avgRating: user.avgRating ?? null,
+        ratingCount: user.ratingCount ?? 0,
+      }
+    : { uid: fallbackUid, name: "Unknown", photoUrl: null, avgRating: null, ratingCount: 0 };
 }
 
 function productSummary(product: (Product & { id: string }) | null, productId: string) {
@@ -80,10 +106,10 @@ orderRoutes.post("/", authMiddleware, async (c) => {
   try {
     body = await c.req.json();
   } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    return httpError(c, 400, "Invalid JSON body");
   }
   const productId = typeof body.productId === "string" ? body.productId : null;
-  if (!productId) return c.json({ error: "productId is required" }, 400);
+  if (!productId) return httpError(c, 400, "productId is required");
 
   const db = firestoreFromEnv(c.env);
   const now = new Date().toISOString();
@@ -91,14 +117,14 @@ orderRoutes.post("/", authMiddleware, async (c) => {
   // The buyer must hold the active reservation on this product.
   let product = await db.getDoc<Product>(`${collections.products}/${productId}`);
   if (!product || product.status === "removed") {
-    return c.json({ error: "Product not found" }, 404);
+    return httpError(c, 404, "Product not found");
   }
   product = await refreshExpiredReservation(db, product);
   if (product.status !== "reserved") {
-    return c.json({ error: "This item is not reserved" }, 409);
+    return httpError(c, 409, "This item is not reserved");
   }
   if (product.reservedBy !== user.uid) {
-    return c.json({ error: "Only the buyer with the active reservation can pay" }, 403);
+    return httpError(c, 403, "Only the buyer with the active reservation can pay");
   }
 
   // Agreed amount: accepted bid for bidding products, else the list price.
@@ -113,7 +139,7 @@ orderRoutes.post("/", authMiddleware, async (c) => {
       limit: 1,
     });
     if (!accepted[0]) {
-      return c.json({ error: "Accepted offer not found for this reservation" }, 409);
+      return httpError(c, 409, "Accepted offer not found for this reservation");
     }
     agreedAmount = accepted[0].amount;
   }
@@ -173,7 +199,7 @@ orderRoutes.post("/", authMiddleware, async (c) => {
   if (currency === "RWF") {
     const phoneNumber = typeof body.phoneNumber === "string" ? body.phoneNumber.trim() : "";
     if (!PHONE_RE.test(phoneNumber)) {
-      return c.json({ error: "A valid phone number is required for mobile money" }, 400);
+      return httpError(c, 400, "A valid phone number is required for mobile money");
     }
     try {
       const { ref } = await paypackFromEnv(c.env).cashin(totalPaid, phoneNumber, order.id);
@@ -245,12 +271,14 @@ orderRoutes.get("/mine", authMiddleware, async (c) => {
     orderBy: { field: "createdAt", direction: "DESCENDING" },
   });
 
-  const rows = await Promise.all(
-    orders.map(async (order) => {
-      const product = await db.getDoc<Product>(`${collections.products}/${order.productId}`);
-      return { ...order, product: productSummary(product, order.productId) };
-    }),
+  const products = await db.getManyDocs<Product>(
+    [...new Set(orders.map((order) => order.productId))].map((id) => `${collections.products}/${id}`),
   );
+
+  const rows = orders.map((order) => ({
+    ...order,
+    product: productSummary(products.get(order.productId) ?? null, order.productId),
+  }));
 
   return c.json({ orders: rows });
 });
@@ -264,21 +292,37 @@ orderRoutes.get("/sales", authMiddleware, async (c) => {
     orderBy: { field: "createdAt", direction: "DESCENDING" },
   });
 
-  const rows = await Promise.all(
-    orders.map(async (order) => {
-      const [product, buyer] = await Promise.all([
-        db.getDoc<Product>(`${collections.products}/${order.productId}`),
-        db.getDoc<User>(`${collections.users}/${order.buyerId}`),
-      ]);
-      return {
-        ...order,
-        product: productSummary(product, order.productId),
-        buyer: buyer
-          ? { uid: buyer.uid, name: buyer.name, email: buyer.email }
-          : { uid: order.buyerId, name: "Unknown", email: null },
-      };
-    }),
-  );
+  const [products, buyers] = await Promise.all([
+    db.getManyDocs<Product>(
+      [...new Set(orders.map((order) => order.productId))].map((id) => `${collections.products}/${id}`),
+    ),
+    db.getManyDocs<User>(
+      [...new Set(orders.map((order) => order.buyerId))].map((id) => `${collections.users}/${id}`),
+    ),
+  ]);
+
+  const rows = orders.map((order) => {
+    const buyer = buyers.get(order.buyerId) ?? null;
+    return {
+      ...order,
+      product: productSummary(products.get(order.productId) ?? null, order.productId),
+      buyer: buyer
+        ? {
+            uid: buyer.uid,
+            name: buyer.name,
+            email: buyer.email,
+            avgRating: buyer.avgRating ?? null,
+            ratingCount: buyer.ratingCount ?? 0,
+          }
+        : {
+            uid: order.buyerId,
+            name: "Unknown",
+            email: null,
+            avgRating: null,
+            ratingCount: 0,
+          },
+    };
+  });
 
   return c.json({ orders: rows });
 });
@@ -287,13 +331,13 @@ orderRoutes.get("/sales", authMiddleware, async (c) => {
 orderRoutes.get("/:id", authMiddleware, async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing order id" }, 400);
+  if (!id) return httpError(c, 400, "Missing order id");
 
   const db = firestoreFromEnv(c.env);
   const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
-  if (!order) return c.json({ error: "Order not found" }, 404);
+  if (!order) return httpError(c, 404, "Order not found");
   if (order.buyerId !== user.uid && order.sellerId !== user.uid) {
-    return c.json({ error: "Only the buyer or seller can view this order" }, 403);
+    return httpError(c, 403, "Only the buyer or seller can view this order");
   }
 
   const [product, buyer, seller] = await Promise.all([
@@ -320,45 +364,264 @@ orderRoutes.get("/:id", authMiddleware, async (c) => {
 });
 
 /**
- * POST /orders/:id/confirm-delivery — the caller confirms depending on their
- * role in the order. When BOTH parties have confirmed, escrow is released and
- * the seller's platform wallet is credited (see lib/escrow.ts).
+ * POST /orders/:id/messages — the caller (buyer or seller on this order)
+ * sends a message in the order thread. The other party is notified.
+ */
+orderRoutes.post("/:id/messages", authMiddleware, async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  if (!id) return httpError(c, 400, "Missing order id");
+
+  let body: { text?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return httpError(c, 400, "Invalid JSON body");
+  }
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (text.length < 1 || text.length > MESSAGE_TEXT_MAX) {
+    return httpError(c, 400, `text must be 1-${MESSAGE_TEXT_MAX} characters`);
+  }
+
+  const db = firestoreFromEnv(c.env);
+  const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
+  if (!order) return httpError(c, 404, "Order not found");
+
+  const role = callerRole(order, user.uid);
+  if (!role) {
+    return httpError(c, 403, "Only the buyer or seller can message on this order");
+  }
+
+  const message = await sendMessage(c.env, order.id, user.uid, role, text);
+
+  const product = await db.getDoc<Product>(`${collections.products}/${order.productId}`);
+  const title = product?.title ?? "your order";
+  const recipientId = role === "buyer" ? order.sellerId : order.buyerId;
+  await createNotification(
+    c.env,
+    recipientId,
+    "order_message",
+    "New message on your order",
+    `New message from the ${role === "buyer" ? "buyer" : "seller"} on your order for "${title}".`,
+    { orderId: order.id, productId: order.productId },
+  );
+
+  return c.json({ message }, 201);
+});
+
+/**
+ * GET /orders/:id/messages — the order thread, oldest first, paginated.
+ * Use `before` (a createdAt ISO string) to page further back into history.
+ */
+orderRoutes.get("/:id/messages", authMiddleware, async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  if (!id) return httpError(c, 400, "Missing order id");
+
+  const db = firestoreFromEnv(c.env);
+  const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
+  if (!order) return httpError(c, 404, "Order not found");
+  if (!callerRole(order, user.uid)) {
+    return httpError(c, 403, "Only the buyer or seller can view this thread");
+  }
+
+  const limit = Math.min(200, Math.max(1, Number(c.req.query("limit") ?? "50")));
+  const before = c.req.query("before") ?? undefined;
+  const result = await listMessages(c.env, order.id, { limit, before });
+  return c.json(result);
+});
+
+/**
+ * POST /orders/:id/messages/read — marks every message from the other party
+ * as read for the caller.
+ */
+orderRoutes.post("/:id/messages/read", authMiddleware, async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  if (!id) return httpError(c, 400, "Missing order id");
+
+  const db = firestoreFromEnv(c.env);
+  const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
+  if (!order) return httpError(c, 404, "Order not found");
+  if (!callerRole(order, user.uid)) {
+    return httpError(c, 403, "Only the buyer or seller can mark this thread read");
+  }
+
+  const updated = await markOrderMessagesRead(c.env, order.id, user.uid);
+  return c.json({ updated });
+});
+
+/**
+ * GET /orders/:id/can-confirm — convenience endpoint for the delivery
+ * confirmation UI: whether the caller may confirm, what each side has done,
+ * and whether the order is blocked (dispute / not held / already confirmed).
+ */
+orderRoutes.get("/:id/can-confirm", authMiddleware, async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  if (!id) return httpError(c, 400, "Missing order id");
+
+  const db = firestoreFromEnv(c.env);
+  const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
+  if (!order) return httpError(c, 404, "Order not found");
+
+  const role = callerRole(order, user.uid);
+  if (!role) {
+    return httpError(c, 403, "Only the buyer or seller can check confirmation status");
+  }
+
+  const feedbackSubmitted =
+    role === "buyer" ? order.buyerFeedback != null : order.sellerFeedback != null;
+  const callerConfirmed =
+    role === "buyer" ? order.buyerConfirmedDelivery : order.sellerConfirmedDelivery;
+  const otherConfirmed =
+    role === "buyer" ? order.sellerConfirmedDelivery : order.buyerConfirmedDelivery;
+
+  let allowed = true;
+  let reason: string | null = null;
+  if (order.escrowStatus !== "held") {
+    allowed = false;
+    reason = order.escrowStatus === "pending_payment"
+      ? "Payment is not held in escrow yet"
+      : "This order can no longer be confirmed";
+  } else if (order.hasDispute === true) {
+    allowed = false;
+    reason = "This order is under review by our support team";
+  } else if (feedbackSubmitted || callerConfirmed) {
+    allowed = false;
+    reason = "You've already submitted your confirmation and feedback";
+  }
+
+  return c.json({
+    orderId: order.id,
+    callerRole: role,
+    allowed,
+    reason,
+    callerConfirmed,
+    otherConfirmed,
+    callerFeedbackSubmitted: feedbackSubmitted,
+    hasDispute: order.hasDispute === true,
+    escrowStatus: order.escrowStatus,
+  });
+});
+
+/**
+ * POST /orders/:id/confirm-delivery — upgraded (Prompt 8): each party must
+ * confirm delivery AND rate the other party before the second confirmation
+ * can release escrow. `received: false` from either side flags the order as a
+ * dispute instead of confirming — funds stay locked until an admin resolves it.
  */
 orderRoutes.post("/:id/confirm-delivery", authMiddleware, async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing order id" }, 400);
+  if (!id) return httpError(c, 400, "Missing order id");
+
+  let body: { received?: unknown; rating?: unknown; comment?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return httpError(c, 400, "Invalid JSON body");
+  }
+  const received = body.received === true;
+  const rating =
+    typeof body.rating === "number" && Number.isInteger(body.rating)
+      ? body.rating
+      : typeof body.rating === "string"
+        ? Number.parseInt(body.rating, 10)
+        : NaN;
+  const comment = typeof body.comment === "string" ? body.comment.trim() : "";
+
+  if (typeof body.received !== "boolean") {
+    return httpError(c, 400, "received must be a boolean");
+  }
+  if (!received) {
+    // Dispute path: explanation required, no rating needed.
+    if (comment.length < 1 || comment.length > 2000) {
+      return httpError(c, 400, "comment is required when received is false (explain the issue)");
+    }
+  } else if (Number.isNaN(rating) || rating < 1 || rating > 5) {
+    return httpError(c, 400, "rating must be an integer between 1 and 5");
+  }
 
   const db = firestoreFromEnv(c.env);
   const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
-  if (!order) return c.json({ error: "Order not found" }, 404);
+  if (!order) return httpError(c, 404, "Order not found");
 
-  const isBuyer = order.buyerId === user.uid;
-  const isSeller = order.sellerId === user.uid;
-  if (!isBuyer && !isSeller) {
-    return c.json({ error: "Only the buyer or seller can confirm delivery" }, 403);
+  const role = callerRole(order, user.uid);
+  if (!role) {
+    return httpError(c, 403, "Only the buyer or seller can confirm delivery");
   }
   if (order.escrowStatus !== "held") {
-    return c.json({ error: "Payment is not held in escrow yet" }, 409);
+    return httpError(c, 409, "Payment is not held in escrow yet");
+  }
+  if (order.hasDispute === true) {
+    return httpError(c, 409, "This order is under review; support will contact you");
   }
 
   const now = new Date().toISOString();
-  const buyerConfirmed = isBuyer ? true : order.buyerConfirmedDelivery;
-  const sellerConfirmed = isSeller ? true : order.sellerConfirmedDelivery;
+  const isBuyer = role === "buyer";
 
-  let updated = await db.updateDoc<Order>(`${collections.orders}/${id}`, {
-    buyerConfirmedDelivery: buyerConfirmed,
-    sellerConfirmedDelivery: sellerConfirmed,
+  // Dispute: flag for admin, do NOT confirm or touch funds.
+  if (!received) {
+    const disputed = await db.updateDoc<Order>(`${collections.orders}/${id}`, {
+      hasDispute: true,
+      disputeReason: comment,
+      updatedAt: now,
+    });
+    await createNotification(
+      c.env,
+      isBuyer ? order.sellerId : order.buyerId,
+      "order_dispute",
+      "Your order is under review",
+      `The ${isBuyer ? "buyer" : "seller"} reported an issue with this order. Funds stay in escrow while support reviews it.`,
+      { orderId: order.id, productId: order.productId },
+    );
+    await createNotification(
+      c.env,
+      user.uid,
+      "order_dispute",
+      "Issue reported — under review",
+      "Your report was received. Our support team will review the order and contact you. No funds move until then.",
+      { orderId: order.id, productId: order.productId },
+    );
+    return c.json({ order: disputed, disputed: true });
+  }
+
+  // Confirm + feedback path.
+  const existingFeedback = isBuyer ? order.buyerFeedback : order.sellerFeedback;
+  if (existingFeedback != null) {
+    return httpError(c, 409, "You've already submitted feedback for this order");
+  }
+
+  const feedback = { rating, comment: comment || null, submittedAt: now };
+  const updates: Partial<Order> = {
     updatedAt: now,
-  });
+  };
+  if (isBuyer) {
+    updates.buyerConfirmedDelivery = true;
+    updates.buyerFeedback = feedback;
+  } else {
+    updates.sellerConfirmedDelivery = true;
+    updates.sellerFeedback = feedback;
+  }
 
-  if (buyerConfirmed && sellerConfirmed) {
+  let updated = await db.updateDoc<Order>(`${collections.orders}/${id}`, updates);
+
+  const buyerConfirmed = isBuyer || updated.buyerConfirmedDelivery;
+  const sellerConfirmed = !isBuyer || updated.sellerConfirmedDelivery;
+  const bothConfirmed =
+    buyerConfirmed && sellerConfirmed && updated.buyerFeedback != null && updated.sellerFeedback != null;
+
+  if (bothConfirmed) {
     await releaseToSeller(c.env, updated);
     updated = await db.updateDoc<Order>(`${collections.orders}/${id}`, {
       escrowStatus: "released",
       updatedAt: now,
     });
   }
+
+  // Rating is about the counterpart: buyer rates the seller, seller rates the buyer.
+  await applyUserRating(c.env, isBuyer ? order.sellerId : order.buyerId, rating);
 
   return c.json({ order: updated });
 });

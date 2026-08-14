@@ -8,6 +8,7 @@ import { formatPrice, mediaUrl } from "@/lib/api";
 import { adminFetchOrder, adminForceRelease, adminMarkRefunded } from "@/lib/admin";
 import type { AdminOrderDetail, EscrowStatus } from "@/types";
 import { cn } from "@/lib/cn";
+import { RatingBadge } from "@/components/ui/Rating";
 
 const STATUS_BADGE: Record<EscrowStatus, string> = {
   pending_payment: "badge-warning",
@@ -114,7 +115,7 @@ export default function AdminOrderDetailPage() {
     );
   }
 
-  const { order, product, buyer, seller, transactions } = data;
+  const { order, product, buyer, seller, transactions, messages } = data;
   const canMarkRefunded = order.escrowStatus === "refund_requested";
   const canForceRelease = order.escrowStatus === "held";
 
@@ -130,6 +131,19 @@ export default function AdminOrderDetailPage() {
           {order.escrowStatus.replace("_", " ")}
         </span>
       </div>
+
+      {order.hasDispute === true && (
+        <div className="mt-4 rounded-xl border border-danger/30 bg-danger-soft p-4 text-sm">
+          <p className="font-semibold text-danger">Dispute — under review</p>
+          <p className="mt-1 text-xs leading-5 text-secondary">
+            {order.disputeReason
+              ? `Reported by a party: "${order.disputeReason}"`
+              : "A party reported an issue with this order."}{" "}
+            Funds are locked in escrow until this is resolved. Review the message thread below,
+            then mark refunded or force release when the outcome is decided.
+          </p>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <section className="card p-5">
@@ -263,6 +277,65 @@ export default function AdminOrderDetailPage() {
           </button>
         </section>
       )}
+
+      <section className="card mt-6 p-5">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Feedback &amp; messages</h2>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-xl border border-border bg-background p-3 text-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">Buyer feedback (on seller)</p>
+            {order.buyerFeedback ? (
+              <div className="mt-2">
+                <RatingBadge avgRating={order.buyerFeedback.rating} ratingCount={1} />
+                {order.buyerFeedback.comment && (
+                  <p className="mt-1.5 text-xs leading-5 text-secondary">&quot;{order.buyerFeedback.comment}&quot;</p>
+                )}
+                <p className="mt-1 text-xs text-muted">{formatDate(order.buyerFeedback.submittedAt)}</p>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-muted">Not submitted.</p>
+            )}
+          </div>
+          <div className="rounded-xl border border-border bg-background p-3 text-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">Seller feedback (on buyer)</p>
+            {order.sellerFeedback ? (
+              <div className="mt-2">
+                <RatingBadge avgRating={order.sellerFeedback.rating} ratingCount={1} />
+                {order.sellerFeedback.comment && (
+                  <p className="mt-1.5 text-xs leading-5 text-secondary">&quot;{order.sellerFeedback.comment}&quot;</p>
+                )}
+                <p className="mt-1 text-xs text-muted">{formatDate(order.sellerFeedback.submittedAt)}</p>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-muted">Not submitted.</p>
+            )}
+          </div>
+        </div>
+
+        {messages.length === 0 ? (
+          <p className="mt-4 text-sm text-muted">No messages in this thread.</p>
+        ) : (
+          <ul className="mt-4 space-y-2">
+            {messages.map((m) => {
+              const isBuyerMsg = m.senderId === order.buyerId;
+              return (
+                <li
+                  key={m.id}
+                  className={cn(
+                    "rounded-2xl px-3 py-2 text-sm",
+                    isBuyerMsg ? "bg-accent-soft text-foreground" : "bg-surface-muted text-foreground",
+                  )}
+                >
+                  <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                  <p className="mt-1 text-[10px] text-muted">
+                    {isBuyerMsg ? buyer?.name ?? "Buyer" : seller?.name ?? "Seller"} ·{" "}
+                    {formatDate(m.createdAt)}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       <section className="card mt-6 p-5">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Wallet transactions</h2>

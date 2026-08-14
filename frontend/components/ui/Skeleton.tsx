@@ -76,3 +76,27 @@ export function ProductDetailSkeleton() {
     </div>
   );
 }
+
+/** Whole-page skeleton for the Explore feed (loading.tsx fallback). */
+export function ExploreSkeleton() {
+  return (
+    <div className="container-page py-8 sm:py-12">
+      <div className="flex flex-wrap items-center gap-3">
+        <Skeleton className="h-9 w-32 rounded-full" />
+        <Skeleton className="ml-auto h-10 w-56 rounded-full sm:w-64" />
+        <Skeleton className="h-10 w-40 rounded-full" />
+        <Skeleton className="h-10 w-28 rounded-full" />
+        <Skeleton className="h-10 w-40 rounded-full" />
+        <Skeleton className="h-10 w-32 rounded-full" />
+      </div>
+      <div className="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <ProductCardSkeleton />
+        <ProductCardSkeleton />
+        <ProductCardSkeleton />
+        <ProductCardSkeleton />
+        <ProductCardSkeleton />
+        <ProductCardSkeleton />
+      </div>
+    </div>
+  );
+}

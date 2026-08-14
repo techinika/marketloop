@@ -12,6 +12,7 @@ import type { Product, SellerBidRow } from "@/types";
 import { useToast } from "@/components/ui/Toast";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListRowSkeleton } from "@/components/ui/Skeleton";
+import { RatingBadge } from "@/components/ui/Rating";
 
 export function SellerBidsManager() {
   const params = useParams<{ id: string }>();
@@ -143,7 +144,10 @@ export function SellerBidsManager() {
                 <div className="size-11 shrink-0 rounded-full bg-accent-soft" />
               )}
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{bid.buyer.name}</p>
+                <p className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-sm font-medium text-foreground">{bid.buyer.name}</span>
+                  <RatingBadge avgRating={bid.buyer.avgRating} ratingCount={bid.buyer.ratingCount} />
+                </p>
                 <p className="text-base font-semibold text-foreground">
                   {formatPrice(bid.amount, bid.currency)}
                 </p>

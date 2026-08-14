@@ -1,16 +1,20 @@
 import { getIdToken } from "@/lib/firebase";
+import { apiBaseUrl } from "@/lib/env";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8787";
-
-export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
+/**
+ * Client-side API layer. `apiFetch` attaches the Firebase ID token.
+ *
+ * Public endpoints + shared helpers (publicFetch, mediaUrl, formatPrice,
+ * ApiError) live in `lib/publicApi.ts` so server components can use them
+ * without importing the Firebase client. Re-exported here for convenience.
+ */
+export {
+  ApiError,
+  publicFetch,
+  mediaUrl,
+  formatPrice,
+} from "@/lib/publicApi";
+import { ApiError, parseErrorMessage } from "@/lib/publicApi";
 
 /**
  * Authenticated fetch against the Workers API.
@@ -26,31 +30,11 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   headers.set("Authorization", `Bearer ${token}`);
   headers.set("Content-Type", "application/json");
 
-  const res = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  const res = await fetch(`${apiBaseUrl}${path}`, { ...init, headers });
   if (!res.ok) {
-    throw new ApiError(res.status, await res.text());
+    const text = await res.text();
+    const { message, parsed } = parseErrorMessage(text);
+    throw new ApiError(res.status, message, parsed);
   }
   return (await res.json()) as T;
-}
-
-/** Public (unauthenticated) fetch against the Workers API. */
-export async function publicFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, init);
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text());
-  }
-  return (await res.json()) as T;
-}
-
-/** Worker-relative media URL for an R2 object key (see GET /media/*). */
-export function mediaUrl(key: string): string {
-  return `${API_BASE_URL}/media/${key}`;
-}
-
-/** Formats a price per currency, e.g. "RWF 45,000" or "$120". */
-export function formatPrice(amount: number, currency: string): string {
-  if (currency === "USD") {
-    return `$${amount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-  }
-  return `RWF ${Math.round(amount).toLocaleString("en-US")}`;
 }

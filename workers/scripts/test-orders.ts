@@ -107,6 +107,8 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     ? (JSON.parse(String(init?.body)) as {
         fields?: Record<string, FirestoreField>;
         name?: string;
+        documents?: string[];
+        newTransaction?: unknown;
         structuredQuery?: {
           from: Array<{ collectionId: string }>;
           where?: {
@@ -166,6 +168,16 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     if (q?.offset) entries = entries.slice(q.offset);
     if (q?.limit) entries = entries.slice(0, q.limit);
     return jsonResponse(entries.map(([path, doc]) => ({ document: docJson(path, doc), readTime: TIME })));
+  }
+
+  if (method === "POST" && rest.endsWith(":batchGet")) {
+    const documents = (body as { documents?: string[] }).documents ?? [];
+    const responses = documents.map((name) => {
+      const path = name.split("/documents/")[1] ?? name;
+      const doc = store.get(path);
+      return doc ? { found: docJson(path, doc), readTime: TIME } : { missing: name, readTime: TIME };
+    });
+    return jsonResponse({ responses });
   }
 
   if (method === "POST" && !rest.includes("/")) {
@@ -281,6 +293,22 @@ function pesapalMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Re
 const fakeImages: R2Bucket = {
   get: async () => null,
 } as unknown as R2Bucket;
+
+// In-memory KV for phone-verification OTP codes.
+const kvStore = new Map<string, string>();
+const fakeKV: KVNamespace = {
+  get: async (key: string, type?: "text" | "json") => {
+    const value = kvStore.get(key);
+    if (value === undefined) return null;
+    return type === "json" ? (JSON.parse(value) as unknown) : value;
+  },
+  put: async (key: string, value: string | ArrayBuffer | ReadableStream) => {
+    kvStore.set(key, String(value));
+  },
+  delete: async (key: string) => {
+    kvStore.delete(key);
+  },
+} as unknown as KVNamespace;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);
@@ -411,6 +439,7 @@ async function main(): Promise<void> {
   try {
     env = {
       IMAGES: fakeImages,
+      OTP_KV: fakeKV,
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -541,20 +570,34 @@ async function main(): Promise<void> {
     assert(heldAgain.status === 200, "duplicate webhook should ack");
 
     // Confirm delivery: buyer first, then seller releases escrow
-    const confirmBuyer = await app.request(`/orders/${orderA.id}/confirm-delivery`, authedPost(buyerToken), env);
+    const confirmBuyer = await app.request(
+      `/orders/${orderA.id}/confirm-delivery`,
+      json(buyerToken, { received: true, rating: 5, comment: "Arrived in perfect condition" }),
+      env,
+    );
     assert(confirmBuyer.status === 200, `buyer confirm failed with ${confirmBuyer.status}`);
     const afterBuyerConfirm = (await confirmBuyer.json()) as { order: Order & { id: string } };
     assert(afterBuyerConfirm.order.buyerConfirmedDelivery === true, "buyer confirmation recorded");
     assert(afterBuyerConfirm.order.escrowStatus === "held", "still held until both confirm");
 
-    const confirmStranger = await app.request(`/orders/${orderA.id}/confirm-delivery`, authedPost(strangerToken), env);
+    const confirmStranger = await app.request(
+      `/orders/${orderA.id}/confirm-delivery`,
+      json(strangerToken, { received: true, rating: 1 }),
+      env,
+    );
     assert(confirmStranger.status === 403, `stranger confirm should be 403, got ${confirmStranger.status}`);
 
-    const confirmSeller = await app.request(`/orders/${orderA.id}/confirm-delivery`, authedPost(sellerToken), env);
+    const confirmSeller = await app.request(
+      `/orders/${orderA.id}/confirm-delivery`,
+      json(sellerToken, { received: true, rating: 4 }),
+      env,
+    );
     assert(confirmSeller.status === 200, `seller confirm failed with ${confirmSeller.status}`);
     const releasedA = (await confirmSeller.json()) as { order: Order & { id: string } };
     assert(releasedA.order.escrowStatus === "released", "escrow released when both confirm");
     assert(releasedA.order.sellerConfirmedDelivery === true, "seller confirmation recorded");
+    assert((releasedA.order.buyerFeedback as { rating: number }).rating === 5, "buyer feedback stored");
+    assert((releasedA.order.sellerFeedback as { rating: number }).rating === 4, "seller feedback stored");
 
     // Seller wallet credited the FULL agreedAmount (deliveryFeePayer = buyer)
     let sellerWallet = await wallet(sellerToken);
@@ -566,8 +609,117 @@ async function main(): Promise<void> {
     assert(creditTx.amount === 46000, "credit = full agreedAmount");
     assert(creditTx.orderId === orderA.id, "credit references the order");
 
-    const confirmReleased = await app.request(`/orders/${orderA.id}/confirm-delivery`, authedPost(buyerToken), env);
+    const confirmReleased = await app.request(
+      `/orders/${orderA.id}/confirm-delivery`,
+      json(buyerToken, { received: true, rating: 5 }),
+      env,
+    );
     assert(confirmReleased.status === 409, `confirm on released order should be 409, got ${confirmReleased.status}`);
+
+    // Ratings were applied to the counterpart users (buyer->seller 5, seller->buyer 4)
+    const ratedSeller = await db.getDoc<User>(`${collections.users}/seller-1`);
+    const ratedBuyer = await db.getDoc<User>(`${collections.users}/buyer-1`);
+    assert(ratedSeller!.avgRating === 5, `seller avgRating should be 5, got ${ratedSeller!.avgRating}`);
+    assert(ratedSeller!.ratingCount === 1, "seller ratingCount should be 1");
+    assert(ratedBuyer!.avgRating === 4, `buyer avgRating should be 4, got ${ratedBuyer!.avgRating}`);
+    assert(ratedBuyer!.ratingCount === 1, "buyer ratingCount should be 1");
+
+    // ---- A2. Messaging: parties can chat, others are blocked -----------------
+    const emptyThread = await app.request(`/orders/${orderA.id}/messages`, bearer(buyerToken), env);
+    assert(emptyThread.status === 200, `empty thread should be 200, got ${emptyThread.status}`);
+    const emptyBody = (await emptyThread.json()) as { messages: unknown[] };
+    assert(emptyBody.messages.length === 0, "no messages yet");
+
+    const strangerMsg = await app.request(
+      `/orders/${orderA.id}/messages`,
+      json(strangerToken, { text: "hi" }),
+      env,
+    );
+    assert(strangerMsg.status === 403, `stranger message should be 403, got ${strangerMsg.status}`);
+
+    const blankMsg = await app.request(`/orders/${orderA.id}/messages`, json(buyerToken, { text: "   " }), env);
+    assert(blankMsg.status === 400, `blank message should be 400, got ${blankMsg.status}`);
+    const overlongMsg = await app.request(
+      `/orders/${orderA.id}/messages`,
+      json(buyerToken, { text: "x".repeat(2001) }),
+      env,
+    );
+    assert(overlongMsg.status === 400, `overlong message should be 400, got ${overlongMsg.status}`);
+
+    const buyerSend = await app.request(
+      `/orders/${orderA.id}/messages`,
+      json(buyerToken, { text: "When will you ship?" }),
+      env,
+    );
+    assert(buyerSend.status === 201, `buyer message send failed with ${buyerSend.status}`);
+    const buyerMsg = ((await buyerSend.json()) as { message: { id: string; senderId: string; text: string } }).message;
+    assert(buyerMsg.senderId === "buyer-1" && buyerMsg.text === "When will you ship?", "buyer message stored");
+
+    const sellerReply = await app.request(
+      `/orders/${orderA.id}/messages`,
+      json(sellerToken, { text: "Tomorrow morning." }),
+      env,
+    );
+    assert(sellerReply.status === 201, `seller reply failed with ${sellerReply.status}`);
+
+    const thread = (await (await app.request(`/orders/${orderA.id}/messages`, bearer(sellerToken), env)).json()) as {
+      messages: Array<{ id: string; senderId: string; text: string; isRead: boolean }>;
+    };
+    assert(thread.messages.length === 2, "two messages in thread");
+    assert(thread.messages[0]!.text === "When will you ship?", "oldest first");
+    assert(thread.messages[1]!.text === "Tomorrow morning.", "newest last");
+    assert(thread.messages[0]!.isRead === false && thread.messages[1]!.isRead === false, "own messages stored unread");
+
+    // Mark-read: buyer marks the seller's reply as read
+    const markRead = await app.request(`/orders/${orderA.id}/messages/read`, authedPost(buyerToken), env);
+    assert(markRead.status === 200, `mark-read failed with ${markRead.status}`);
+    const markReadBody = (await markRead.json()) as { updated: number };
+    assert(markReadBody.updated === 1, "one unread message for the buyer");
+    const readThread = (await (await app.request(`/orders/${orderA.id}/messages`, bearer(buyerToken), env)).json()) as {
+      messages: Array<{ isRead: boolean }>;
+    };
+    assert(readThread.messages[1]!.isRead === true, "reply marked read");
+
+    // ---- A3. can-confirm reflects the current state ---------------------------
+    const canConfirm = (await (await app.request(`/orders/${orderA.id}/can-confirm`, bearer(buyerToken), env)).json()) as {
+      allowed: boolean;
+      escrowStatus: string;
+    };
+    assert(canConfirm.allowed === false && canConfirm.escrowStatus === "released", "cannot confirm a released order");
+
+    // ---- A4. Dispute: received:false flags the order, holds funds -------------
+    const productDisp = await createProduct(sellerToken, { title: "Disputed item", priceAmount: 8000 });
+    await reserve(buyerToken, productDisp);
+    const createDisp = await app.request("/orders", json(buyerToken, { productId: productDisp, phoneNumber: "0788123456" }), env);
+    const orderDisp = ((await createDisp.json()) as { order: Order & { id: string } }).order;
+    await paypackWebhook({ ref: orderDisp.paymentReference, status: "successful", kind: "CASHIN" });
+
+    const noReasonDispute = await app.request(
+      `/orders/${orderDisp.id}/confirm-delivery`,
+      json(buyerToken, { received: false }),
+      env,
+    );
+    assert(noReasonDispute.status === 400, `dispute without reason should be 400, got ${noReasonDispute.status}`);
+
+    const disputeRes = await app.request(
+      `/orders/${orderDisp.id}/confirm-delivery`,
+      json(buyerToken, { received: false, comment: "Never arrived, no tracking number." }),
+      env,
+    );
+    assert(disputeRes.status === 200, `dispute flag should be 200, got ${disputeRes.status}`);
+    const disputed = (await disputeRes.json()) as { order: Order & { id: string } };
+    assert(disputed.order.hasDispute === true, "order flagged as dispute");
+    assert(disputed.order.disputeReason === "Never arrived, no tracking number.", "dispute reason stored");
+    assert(disputed.order.escrowStatus === "held", "funds stay held on dispute");
+    assert(disputed.order.buyerFeedback == null, "no rating recorded for a disputed delivery");
+
+    // The seller cannot auto-release a disputed order.
+    const releaseDisp = await app.request(
+      `/orders/${orderDisp.id}/confirm-delivery`,
+      json(sellerToken, { received: true, rating: 5 }),
+      env,
+    );
+    assert(releaseDisp.status === 409, `releasing a disputed order should be 409, got ${releaseDisp.status}`);
 
     // ---- B. RWF direct-buy with deliveryFeePayer = seller --------------------
     const productB = await createProduct(sellerToken, {
@@ -602,8 +754,16 @@ async function main(): Promise<void> {
 
     // Reuse-after-failure retry should be able to succeed.
     await paypackWebhook({ ref: retriedB.paymentReference, status: "successful", kind: "CASHIN" });
-    await app.request(`/orders/${orderB.id}/confirm-delivery`, authedPost(buyerToken), env);
-    const confirmB = await app.request(`/orders/${orderB.id}/confirm-delivery`, authedPost(sellerToken), env);
+    await app.request(
+      `/orders/${orderB.id}/confirm-delivery`,
+      json(buyerToken, { received: true, rating: 5 }),
+      env,
+    );
+    const confirmB = await app.request(
+      `/orders/${orderB.id}/confirm-delivery`,
+      json(sellerToken, { received: true, rating: 5 }),
+      env,
+    );
     assert(confirmB.status === 200, `confirm B failed with ${confirmB.status}`);
 
     // deliveryFeePayer = seller -> seller receives agreedAmount - deliveryFee
@@ -680,8 +840,16 @@ async function main(): Promise<void> {
     assert((heldD.product as { status: string }).status === "sold", "pesapal product sold");
 
     // Confirm + release: seller credit = 150 (buyer paid the delivery fee)
-    await app.request(`/orders/${orderD.order.id}/confirm-delivery`, authedPost(buyerToken), env);
-    const confirmD = await app.request(`/orders/${orderD.order.id}/confirm-delivery`, authedPost(sellerToken), env);
+    await app.request(
+      `/orders/${orderD.order.id}/confirm-delivery`,
+      json(buyerToken, { received: true, rating: 5 }),
+      env,
+    );
+    const confirmD = await app.request(
+      `/orders/${orderD.order.id}/confirm-delivery`,
+      json(sellerToken, { received: true, rating: 5 }),
+      env,
+    );
     assert(confirmD.status === 200, `confirm D failed with ${confirmD.status}`);
     sellerWallet = await wallet(sellerToken);
     assert(sellerWallet.walletBalance === 93000 + 150, `seller balance should be 93150, got ${sellerWallet.walletBalance}`);

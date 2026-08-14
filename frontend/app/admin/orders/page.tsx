@@ -136,7 +136,8 @@ export default function AdminOrdersPage() {
                     >
                       {row.product.title}
                     </Link>
-                    {row.needsAttention && (
+                    {row.hasDispute && <span className="badge badge-danger ml-2">Dispute</span>}
+                    {row.needsAttention && !row.hasDispute && (
                       <span className="badge badge-warning ml-2">Attention</span>
                     )}
                   </td>

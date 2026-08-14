@@ -123,8 +123,15 @@ async function main(): Promise<void> {
     const wrongIssRes = await testApp.request("/me", { headers: { Authorization: `Bearer ${wrongIss}` } }, env);
     assert(wrongIssRes.status === 401, `expected 401 for wrong issuer, got ${wrongIssRes.status}`);
 
-    // 7. Tampered signature.
-    const tampered = `${token.slice(0, -1)}${token.endsWith("a") ? "b" : "a"}`;
+    // 7. Tampered signature. Flip a character with real data bits: the last
+    // base64url char of a 2048-bit RSA signature holds only zero padding bits,
+    // so mutating it can decode to the same bytes. The 4th-from-last char is
+    // always full data.
+    const sig = token.slice(token.lastIndexOf(".") + 1);
+    const flipAt = sig.length - 4;
+    const flipped = sig[flipAt] === "a" ? "b" : "a";
+    const tamperedSig = sig.slice(0, flipAt) + flipped + sig.slice(flipAt + 1);
+    const tampered = token.slice(0, token.lastIndexOf(".") + 1) + tamperedSig;
     const tamperedRes = await testApp.request("/me", { headers: { Authorization: `Bearer ${tampered}` } }, env);
     assert(tamperedRes.status === 401, `expected 401 for tampered token, got ${tamperedRes.status}`);
 

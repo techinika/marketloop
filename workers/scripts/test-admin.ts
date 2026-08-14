@@ -107,6 +107,8 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     ? (JSON.parse(String(init?.body)) as {
         fields?: Record<string, FirestoreField>;
         name?: string;
+        documents?: string[];
+        newTransaction?: unknown;
         structuredQuery?: {
           from: Array<{ collectionId: string }>;
           where?: {
@@ -166,6 +168,16 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     if (q?.offset) entries = entries.slice(q.offset);
     if (q?.limit) entries = entries.slice(0, q.limit);
     return jsonResponse(entries.map(([path, doc]) => ({ document: docJson(path, doc), readTime: TIME })));
+  }
+
+  if (method === "POST" && rest.endsWith(":batchGet")) {
+    const documents = (body as { documents?: string[] }).documents ?? [];
+    const responses = documents.map((name) => {
+      const path = name.split("/documents/")[1] ?? name;
+      const doc = store.get(path);
+      return doc ? { found: docJson(path, doc), readTime: TIME } : { missing: name, readTime: TIME };
+    });
+    return jsonResponse({ responses });
   }
 
   if (method === "POST" && !rest.includes("/")) {
@@ -255,6 +267,22 @@ function pesapalMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Re
 const fakeImages: R2Bucket = {
   get: async () => null,
 } as unknown as R2Bucket;
+
+// In-memory KV for phone-verification OTP codes.
+const kvStore = new Map<string, string>();
+const fakeKV: KVNamespace = {
+  get: async (key: string, type?: "text" | "json") => {
+    const value = kvStore.get(key);
+    if (value === undefined) return null;
+    return type === "json" ? (JSON.parse(value) as unknown) : value;
+  },
+  put: async (key: string, value: string | ArrayBuffer | ReadableStream) => {
+    kvStore.set(key, String(value));
+  },
+  delete: async (key: string) => {
+    kvStore.delete(key);
+  },
+} as unknown as KVNamespace;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);
@@ -372,6 +400,7 @@ async function main(): Promise<void> {
   try {
     env = {
       IMAGES: fakeImages,
+      OTP_KV: fakeKV,
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -485,9 +514,17 @@ async function main(): Promise<void> {
     assert(sellerHeld.some((n) => n.type === "payment_held" && n.relatedOrderId === orderA.id), "seller notified payment held");
     assert(buyerHeld.some((n) => n.type === "payment_held" && n.relatedOrderId === orderA.id), "buyer notified payment held");
 
-    const confirmBuyer = await app.request(`/orders/${orderA.id}/confirm-delivery`, authedPost(buyerToken), env);
+    const confirmBuyer = await app.request(
+      `/orders/${orderA.id}/confirm-delivery`,
+      json(buyerToken, { received: true, rating: 5 }),
+      env,
+    );
     assert(confirmBuyer.status === 200, `buyer confirm failed with ${confirmBuyer.status}`);
-    const confirmSeller = await app.request(`/orders/${orderA.id}/confirm-delivery`, authedPost(sellerToken), env);
+    const confirmSeller = await app.request(
+      `/orders/${orderA.id}/confirm-delivery`,
+      json(sellerToken, { received: true, rating: 4 }),
+      env,
+    );
     assert(confirmSeller.status === 200, `seller confirm failed with ${confirmSeller.status}`);
     const sellerReleased = await getNotifications(sellerToken);
     assert(
@@ -654,6 +691,49 @@ async function main(): Promise<void> {
     const salesBody = (await salesRes.json()) as { orders: Array<{ id: string; buyer: { name: string; email: string } }> };
     assert(salesBody.orders.length === 3, "seller sees all their sales");
     assert(salesBody.orders.some((o) => o.buyer.name === "Buyer One"), "sales include buyer info");
+
+    // ---- 11. Dispute surfaces to admin (pinned first) + thread in detail -----
+    const productDisp = await createProduct(sellerToken, { title: "Disputed widget", priceAmount: 6000 });
+    await reserve(buyerToken, productDisp);
+    const createDisp = await app.request("/orders", json(buyerToken, { productId: productDisp, phoneNumber: "0788123456" }), env);
+    const orderDisp = ((await createDisp.json()) as { order: Order & { id: string } }).order;
+    await paypackWebhook({ ref: orderDisp.paymentReference, status: "successful", kind: "CASHIN" });
+
+    await app.request(`/orders/${orderDisp.id}/messages`, json(buyerToken, { text: "Item arrived damaged." }), env);
+    await app.request(`/orders/${orderDisp.id}/messages`, json(sellerToken, { text: "Happy to fix it." }), env);
+
+    const disputeRes = await app.request(
+      `/orders/${orderDisp.id}/confirm-delivery`,
+      json(buyerToken, { received: false, comment: "Box was empty on arrival." }),
+      env,
+    );
+    assert(disputeRes.status === 200, `dispute flag failed with ${disputeRes.status}`);
+
+    const dispList = await app.request("/admin/orders", bearer(adminToken), env);
+    const dispListBody = (await dispList.json()) as {
+      orders: Array<{ id: string; hasDispute: boolean; disputeReason: string | null; needsAttention: boolean }>;
+    };
+    const dispRow = dispListBody.orders.find((o) => o.id === orderDisp.id)!;
+    assert(dispRow.hasDispute === true, "admin list flags the dispute");
+    assert(dispRow.disputeReason === "Box was empty on arrival.", "dispute reason exposed to admin");
+    assert(dispListBody.orders[0]!.hasDispute === true, "dispute order pinned above refunds/deadlines");
+
+    const dispDetail = await app.request(`/admin/orders/${orderDisp.id}`, bearer(adminToken), env);
+    assert(dispDetail.status === 200, `admin dispute detail failed with ${dispDetail.status}`);
+    const dispDetailBody = (await dispDetail.json()) as {
+      order: Order & { id: string };
+      messages: Array<{ senderId: string; text: string }>;
+    };
+    assert(dispDetailBody.order.hasDispute === true, "detail carries dispute flag");
+    assert(dispDetailBody.messages.length === 2, "admin sees the full message thread");
+    assert(dispDetailBody.messages[0]!.text === "Item arrived damaged.", "thread ordered oldest first");
+    assert(dispDetailBody.messages[1]!.text === "Happy to fix it.", "thread includes seller reply");
+
+    const buyerAfterDispute = await getNotifications(buyerToken);
+    assert(
+      buyerAfterDispute.some((n) => n.type === "order_dispute" && n.relatedOrderId === orderDisp.id),
+      "reporting party notified their issue is under review",
+    );
 
     console.log(
       "ADMIN/NOTIFICATION TESTS PASSED (isAdmin gate, /auth/me, notifications + read semantics, admin orders/users/stats, mark-refunded, force-release, needs-attention ordering, /orders/mine + /orders/sales)",

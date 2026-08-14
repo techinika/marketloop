@@ -79,6 +79,7 @@ export type FieldOperator =
   | ">="
   | ">"
   | "array-contains"
+  | "array-contains-any"
   | "in";
 
 export interface QueryFilter {
@@ -103,6 +104,7 @@ const OP_MAP: Record<FieldOperator, string> = {
   ">=": "GREATER_THAN_OR_EQUAL",
   ">": "GREATER_THAN",
   "array-contains": "ARRAY_CONTAINS",
+  "array-contains-any": "ARRAY_CONTAINS_ANY",
   "in": "IN",
 };
 
@@ -339,5 +341,32 @@ export class FirestoreClient {
         id: docId(r.document!.name),
         ...(decodeDocument(r.document!) as T),
       }));
+  }
+
+  /**
+   * Reads many documents with one `documents:batchGet` call (Firestore caps a
+   * batch read at 10 documents, so larger sets are chunked). Missing documents
+   * are omitted from the result map — callers can't distinguish "not found"
+   * from a missing entry. Use this to avoid N+1 read patterns.
+   */
+  async getManyDocs<T extends object>(paths: string[]): Promise<Map<string, WithId<T>>> {
+    const out = new Map<string, WithId<T>>();
+    for (let i = 0; i < paths.length; i += 10) {
+      const chunk = paths.slice(i, i + 10);
+      const result = (await this.requestJson(":batchGet", {
+        method: "POST",
+        body: JSON.stringify({
+          documents: chunk.map((p) => `${this.root}/${p}`),
+          newTransaction: { readOnly: {} },
+        }),
+      })) as { responses?: Array<{ found?: FirestoreDocument }> } | null;
+      if (!result?.responses) continue;
+      for (const item of result.responses) {
+        if (!item.found) continue;
+        const id = docId(item.found.name);
+        out.set(id, { id, ...(decodeDocument(item.found) as T) });
+      }
+    }
+    return out;
   }
 }

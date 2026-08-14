@@ -11,12 +11,20 @@ crons = ["0 * * * *"]
 binding = "IMAGES"
 bucket_name = "marketloop-images"
 
+# --- KV: phone-verification OTP codes ---
+# Create a namespace in the Cloudflare dashboard (Workers & Pages -> KV) and
+# paste its id here; `preview_id` is used by `wrangler dev` / `wrangler types`.
+[[kv_namespaces]]
+binding = "OTP_KV"
+id = "00000000000000000000000000000000"
+preview_id = "00000000000000000000000000000000"
+
 # --- Vars (non-secret) ---
 [vars]
 FIREBASE_PROJECT_ID = "marketloop-rw"
 R2_ACCOUNT_ID = ""
 R2_BUCKET_NAME = "marketloop-images"
-FRONTEND_URL = "http://localhost:3000"
+FRONTEND_URL = "https://marketloop.techinika.com"
 
 # --- Secrets ---
 # Never commit secret values. Set them via `wrangler secret put <NAME>` for

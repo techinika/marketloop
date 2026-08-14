@@ -17,6 +17,13 @@ authRoutes.get("/me", async (c) => {
   const db = firestoreFromEnv(c.env);
   const profile = await db.getDoc<User>(`${collections.users}/${user.uid}`);
   return c.json({
-    user: { ...user, isAdmin: profile?.isAdmin === true },
+    user: {
+      ...user,
+      isAdmin: profile?.isAdmin === true,
+      phoneVerifiedAt: profile?.phoneVerifiedAt ?? null,
+      verificationStatus: profile?.verificationStatus ?? "unverified",
+      idDocumentType: profile?.idDocumentType ?? null,
+      verificationNote: profile?.verificationNote ?? null,
+    },
   });
 });

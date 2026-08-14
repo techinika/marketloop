@@ -57,6 +57,9 @@ export default function AdminOverviewPage() {
         <Link href="/admin/users" className="btn btn-secondary">
           Users
         </Link>
+        <Link href="/admin/verifications" className="btn btn-secondary">
+          Verifications
+        </Link>
       </nav>
 
       {error && !stats ? (

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
 import { firestoreFromEnv } from "../lib/firestore";
+import { httpError } from "../lib/http";
 import { authMiddleware } from "../middleware/auth";
 import { collections, type Notification } from "../models";
 import type { AppEnv } from "../types";
@@ -51,13 +52,13 @@ notificationRoutes.post("/read-all", async (c) => {
 notificationRoutes.post("/:id/read", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing notification id" }, 400);
+  if (!id) return httpError(c, 400, "Missing notification id");
 
   const db = firestoreFromEnv(c.env);
   const notification = await db.getDoc<Notification>(`${collections.notifications}/${id}`);
-  if (!notification) return c.json({ error: "Notification not found" }, 404);
+  if (!notification) return httpError(c, 404, "Notification not found");
   if (notification.userId !== user.uid) {
-    return c.json({ error: "You can only mark your own notifications as read" }, 403);
+    return httpError(c, 403, "You can only mark your own notifications as read");
   }
 
   const updated = await db.updateDoc<Notification>(`${collections.notifications}/${id}`, {

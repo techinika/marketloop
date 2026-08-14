@@ -68,7 +68,10 @@ function OrderList({ orders, kind }: { orders: DashboardOrder[]; kind: "sale" | 
               </div>
               <div className="text-right">
                 <p className="font-semibold text-foreground">{formatPrice(order.totalPaid, order.currency)}</p>
-                <span className={cn("badge mt-1", badge.cls)}>{badge.label}</span>
+                <div className="mt-1 flex items-center justify-end gap-1.5">
+                  {order.hasDispute === true && <span className="badge badge-danger">Under review</span>}
+                  <span className={cn("badge", badge.cls)}>{badge.label}</span>
+                </div>
               </div>
             </Link>
           </li>

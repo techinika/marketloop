@@ -213,6 +213,15 @@
   }
 }
 
+@utility btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+
+  &:hover {
+    background: color-mix(in srgb, var(--color-danger) 85%, #000);
+  }
+}
+
 /* ---------------------------------------------------------------------------
  * Forms — shared field base + labels. Focus uses an accent ring, not browser blue.
  * ------------------------------------------------------------------------- */

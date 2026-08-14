@@ -6,6 +6,8 @@ export type ProductStatus = "active" | "sold" | "reserved" | "removed";
 export type DeliveryFeePayer = "seller" | "buyer";
 export type BidStatus = "active" | "withdrawn" | "accepted";
 export type PaymentProvider = "paypack" | "pesapal";
+export type VerificationStatus = "unverified" | "pending" | "verified" | "rejected";
+export type IdDocumentType = "national_id" | "passport" | "drivers_license";
 export type EscrowStatus =
   | "pending_payment"
   | "held"
@@ -33,6 +35,12 @@ export interface SellerSummary {
   uid: string;
   name: string;
   photoUrl: string | null;
+  avgRating: number | null;
+  ratingCount: number;
+  /** Identity verification status (informational; never gates selling). */
+  verificationStatus?: VerificationStatus;
+  /** True once the seller confirmed a phone number by OTP. */
+  phoneVerified?: boolean;
 }
 
 /** Response of GET /products. */
@@ -55,6 +63,39 @@ export interface AuthUser {
   name: string | null;
   picture: string | null;
   isAdmin?: boolean;
+  /** Set once the phone number was confirmed via OTP. */
+  phoneVerifiedAt?: string | null;
+  verificationStatus?: VerificationStatus;
+  idDocumentType?: IdDocumentType | null;
+  verificationNote?: string | null;
+}
+
+/** Response of GET /verifications/me. */
+export interface VerificationState {
+  phoneVerifiedAt: string | null;
+  verificationStatus: VerificationStatus;
+  idDocumentType: IdDocumentType | null;
+  verificationSubmittedAt: string | null;
+  verificationNote: string | null;
+}
+
+/** Row in GET /admin/verifications/pending. */
+export interface AdminVerificationRow {
+  uid: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  photoUrl: string | null;
+  phoneVerified: boolean;
+  idDocumentType: IdDocumentType | null;
+  verificationSubmittedAt: string | null;
+  createdAt: string;
+  documentUrl: string | null;
+}
+
+/** Response of GET /admin/verifications/pending. */
+export interface AdminVerificationList {
+  verifications: AdminVerificationRow[];
 }
 
 /** users/{uid} */
@@ -67,9 +108,16 @@ export interface User {
   walletBalance: number;
   createdAt: string;
   rating: number | null;
+  /** Average rating received across transactions (1-5). Null until first rating. */
+  avgRating?: number | null;
+  /** Number of ratings received across transactions. */
+  ratingCount?: number;
   /** Admin flag, set manually in Firestore (no self-serve admin signup). */
   isAdmin?: boolean;
 }
+
+/** Explore feed ordering (GET /products?sortBy=). */
+export type FeedSortBy = "newest" | "price_asc" | "price_desc";
 
 /** products/{productId} (API responses always include `id`) */
 export interface Product {
@@ -78,6 +126,8 @@ export interface Product {
   title: string;
   description: string;
   category: string;
+  /** Lowercased title words used for keyword search; may be absent on old listings. */
+  titleKeywords?: string[];
   priceAmount: number;
   priceCurrency: Currency;
   isNegotiable: boolean;
@@ -119,7 +169,7 @@ export interface SellerBidRow {
   amount: number;
   currency: string;
   createdAt: string;
-  buyer: { uid: string; name: string; photoUrl: string | null };
+  buyer: { uid: string; name: string; photoUrl: string | null; avgRating: number | null; ratingCount: number };
 }
 
 /** A row in the buyer's bid dashboard (GET /bids/mine). */
@@ -149,6 +199,45 @@ export interface CheckoutInfo {
   currency: string;
 }
 
+/** Delivery confirmation feedback. Required from both parties before release. */
+export interface Feedback {
+  rating: number;
+  comment: string | null;
+  submittedAt: string;
+}
+
+/** messages/{messageId} — one entry in an order's chat thread. */
+export interface Message {
+  id: string;
+  orderId: string;
+  senderId: string;
+  senderRole: "buyer" | "seller";
+  text: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+/** Response of GET /orders/:id/messages. */
+export interface MessageListResponse {
+  messages: Message[];
+  hasMore: boolean;
+  /** Cursor for older messages (createdAt of the oldest returned). */
+  nextBefore: string | null;
+}
+
+/** Response of GET /orders/:id/can-confirm. */
+export interface CanConfirmResponse {
+  orderId: string;
+  callerRole: "buyer" | "seller";
+  allowed: boolean;
+  reason: string | null;
+  callerConfirmed: boolean;
+  otherConfirmed: boolean;
+  callerFeedbackSubmitted: boolean;
+  hasDispute: boolean;
+  escrowStatus: EscrowStatus;
+}
+
 /** orders/{orderId} */
 export interface Order {
   id: string;
@@ -170,6 +259,11 @@ export interface Order {
   escrowStatus: EscrowStatus;
   buyerConfirmedDelivery: boolean;
   sellerConfirmedDelivery: boolean;
+  buyerFeedback?: Feedback | null;
+  sellerFeedback?: Feedback | null;
+  /** True when either party reported a problem; funds stay locked until admin review. */
+  hasDispute?: boolean;
+  disputeReason?: string | null;
   /** Set when payment confirms: now + 5 days. Empty until then. */
   deliveryDeadline: string;
   createdAt: string;
@@ -181,6 +275,8 @@ export interface PartySummary {
   uid: string;
   name: string;
   photoUrl: string | null;
+  avgRating: number | null;
+  ratingCount: number;
 }
 
 /** Response of GET /orders/:id. */
@@ -253,6 +349,8 @@ export interface AdminOrderRow {
   seller: { uid: string; name: string; email: string | null };
   product: { id: string; title: string };
   needsAttention: boolean;
+  hasDispute: boolean;
+  disputeReason: string | null;
 }
 
 /** Response of GET /admin/orders. */
@@ -269,6 +367,7 @@ export interface AdminOrderDetail {
   buyer: User | null;
   seller: User | null;
   transactions: WalletTransaction[];
+  messages: Message[];
 }
 
 /** Row in GET /admin/users. */
@@ -313,5 +412,11 @@ export interface DashboardOrder extends Order {
     isBiddingEnabled: boolean;
   } | null;
   /** Present on /orders/sales rows only. */
-  buyer?: { uid: string; name: string; email: string | null };
+  buyer?: {
+    uid: string;
+    name: string;
+    email: string | null;
+    avgRating: number | null;
+    ratingCount: number;
+  };
 }

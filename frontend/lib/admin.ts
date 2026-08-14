@@ -4,7 +4,10 @@ import type {
   AdminOrderList,
   AdminStats,
   AdminUserList,
+  AdminVerificationList,
+  AdminVerificationRow,
   Order,
+  User,
 } from "@/types";
 
 /** GET /admin/orders — all orders, filterable by escrowStatus. */
@@ -48,3 +51,28 @@ export async function adminListUsers(search = "", page = 1): Promise<AdminUserLi
 export async function adminFetchStats(): Promise<AdminStats> {
   return apiFetch<AdminStats>("/admin/stats");
 }
+
+/** GET /admin/verifications/pending — identity submissions awaiting review. */
+export async function adminListPendingVerifications(): Promise<AdminVerificationList> {
+  return apiFetch<AdminVerificationList>("/admin/verifications/pending");
+}
+
+/** POST /admin/verifications/:uid/approve — approve an identity submission. */
+export async function adminApproveVerification(uid: string): Promise<User> {
+  const res = await apiFetch<{ user: User }>(
+    `/admin/verifications/${encodeURIComponent(uid)}/approve`,
+    { method: "POST" },
+  );
+  return res.user;
+}
+
+/** POST /admin/verifications/:uid/reject — reject with a reason shown to the user. */
+export async function adminRejectVerification(uid: string, reason: string): Promise<User> {
+  const res = await apiFetch<{ user: User }>(
+    `/admin/verifications/${encodeURIComponent(uid)}/reject`,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+  return res.user;
+}
+
+export type { AdminVerificationRow };

@@ -105,6 +105,7 @@ export function AccountMenu() {
     { href: "/my-bids", label: "My Bids" },
     { href: "/sell/my-listings", label: "My Listings" },
     { href: "/wallet", label: "Wallet" },
+    { href: "/account/verification", label: "Verification" },
   ];
   if (me?.isAdmin === true) {
     items.push({ href: "/admin", label: "Admin" });

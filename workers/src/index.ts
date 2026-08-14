@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import { processExpiredOrders } from "./lib/escrow";
+import { validateEnv } from "./lib/env";
 import type { AppEnv, Env } from "./types";
 import { adminRoutes } from "./routes/admin";
 import { authRoutes } from "./routes/auth";
@@ -12,6 +13,7 @@ import { orderRoutes } from "./routes/orders";
 import { productBidRoutes } from "./routes/product-bids";
 import { productRoutes } from "./routes/products";
 import { uploadRoutes } from "./routes/uploads";
+import { verificationRoutes } from "./routes/verifications";
 import { walletRoutes } from "./routes/wallet";
 import { webhookRoutes } from "./routes/webhooks";
 
@@ -19,7 +21,16 @@ const app = new Hono<AppEnv>();
 
 app.use("*", cors());
 
-app.get("/health", (c) => c.json({ status: "ok" }));
+app.get("/health", (c) => {
+  // Bindings + secrets are validated here (cheap, cold-path) so a
+  // misconfigured deployment reports itself instead of failing on the first
+  // real request. See lib/env.ts.
+  const problems = validateEnv(c.env);
+  if (problems.length > 0) {
+    return c.json({ status: "degraded", problems }, 500);
+  }
+  return c.json({ status: "ok" });
+});
 
 app.route("/auth", authRoutes);
 app.route("/uploads", uploadRoutes);
@@ -29,6 +40,7 @@ app.route("/products", productBidRoutes);
 app.route("/bids", bidRoutes);
 app.route("/orders", orderRoutes);
 app.route("/wallet", walletRoutes);
+app.route("/verifications", verificationRoutes);
 app.route("/webhooks", webhookRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/admin", adminRoutes);

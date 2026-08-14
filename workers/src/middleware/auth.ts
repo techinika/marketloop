@@ -6,6 +6,7 @@ import {
   type AuthUser,
   type TokenVerifyEnv,
 } from "../lib/firebase-auth";
+import { httpError } from "../lib/http";
 
 export type AuthMiddlewareEnv = {
   Bindings: TokenVerifyEnv;
@@ -19,7 +20,7 @@ export type AuthMiddlewareEnv = {
 export const authMiddleware = createMiddleware<AuthMiddlewareEnv>(async (c, next) => {
   const header = c.req.header("Authorization");
   if (!header?.startsWith("Bearer ")) {
-    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+    return httpError(c, 401, "Missing or invalid Authorization header");
   }
 
   const token = header.slice("Bearer ".length).trim();
@@ -29,7 +30,7 @@ export const authMiddleware = createMiddleware<AuthMiddlewareEnv>(async (c, next
     await next();
   } catch (err) {
     if (err instanceof FirebaseTokenError) {
-      return c.json({ error: "Unauthorized", detail: err.message }, 401);
+      return httpError(c, 401, "Unauthorized", { detail: err.message });
     }
     throw err;
   }

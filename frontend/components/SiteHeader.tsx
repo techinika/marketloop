@@ -12,11 +12,8 @@ function Wordmark({ href, children }: { href: string; children: React.ReactNode 
   return (
     <Link
       href={href}
-      className="flex items-center gap-2 text-base font-semibold tracking-tight text-foreground"
+      className="flex items-center text-base font-semibold tracking-tight text-foreground"
     >
-      <span className="flex size-6 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-white">
-        M
-      </span>
       {children}
     </Link>
   );

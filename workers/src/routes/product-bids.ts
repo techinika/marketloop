@@ -2,6 +2,7 @@ import { Hono } from "hono";
 
 import { activeBidsForProduct, highestActiveBid, refreshExpiredReservation } from "../lib/bids";
 import { firestoreFromEnv } from "../lib/firestore";
+import { httpError } from "../lib/http";
 import { createNotification } from "../lib/notify";
 import { authMiddleware } from "../middleware/auth";
 import { collections, type Bid, type Product, type User } from "../models";
@@ -17,40 +18,40 @@ export const productBidRoutes = new Hono<AppEnv>();
 productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing product id" }, 400);
+  if (!id) return httpError(c, 400, "Missing product id");
 
   let body: { amount?: unknown; currency?: unknown };
   try {
     body = await c.req.json();
   } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    return httpError(c, 400, "Invalid JSON body");
   }
 
   const db = firestoreFromEnv(c.env);
   let product = await db.getDoc<Product>(`${collections.products}/${id}`);
   if (!product || product.status === "removed") {
-    return c.json({ error: "Product not found" }, 404);
+    return httpError(c, 404, "Product not found");
   }
   product = await refreshExpiredReservation(db, product);
 
   if (!product.isBiddingEnabled) {
-    return c.json({ error: "Bidding is not enabled on this product" }, 400);
+    return httpError(c, 400, "Bidding is not enabled on this product");
   }
   if (product.status !== "active") {
-    return c.json({ error: "This product is no longer accepting bids" }, 409);
+    return httpError(c, 409, "This product is no longer accepting bids");
   }
   if (product.sellerId === user.uid) {
-    return c.json({ error: "You cannot bid on your own product" }, 400);
+    return httpError(c, 400, "You cannot bid on your own product");
   }
   if (
     typeof body.amount !== "number" ||
     !Number.isFinite(body.amount) ||
     body.amount <= 0
   ) {
-    return c.json({ error: "amount must be a positive number" }, 400);
+    return httpError(c, 400, "amount must be a positive number");
   }
   if (body.currency !== product.priceCurrency) {
-    return c.json({ error: `currency must be ${product.priceCurrency}` }, 400);
+    return httpError(c, 400, `currency must be ${product.priceCurrency}`);
   }
 
   const existing = await db.queryCollection<Bid>(collections.bids, {
@@ -103,12 +104,12 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
 /** GET /products/:id/bids — public bid summary (bidders stay anonymous). */
 productBidRoutes.get("/:id/bids", async (c) => {
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing product id" }, 400);
+  if (!id) return httpError(c, 400, "Missing product id");
 
   const db = firestoreFromEnv(c.env);
   let product = await db.getDoc<Product>(`${collections.products}/${id}`);
   if (!product || product.status === "removed") {
-    return c.json({ error: "Product not found" }, 404);
+    return httpError(c, 404, "Product not found");
   }
   product = await refreshExpiredReservation(db, product);
 
@@ -124,12 +125,12 @@ productBidRoutes.get("/:id/bids", async (c) => {
 productBidRoutes.get("/:id/bids/mine", authMiddleware, async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing product id" }, 400);
+  if (!id) return httpError(c, 400, "Missing product id");
 
   const db = firestoreFromEnv(c.env);
   const product = await db.getDoc<Product>(`${collections.products}/${id}`);
   if (!product || product.status === "removed") {
-    return c.json({ error: "Product not found" }, 404);
+    return httpError(c, 404, "Product not found");
   }
 
   const mine = await db.queryCollection<Bid>(collections.bids, {
@@ -147,15 +148,15 @@ productBidRoutes.get("/:id/bids/mine", authMiddleware, async (c) => {
 productBidRoutes.get("/:id/bids/all", authMiddleware, async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing product id" }, 400);
+  if (!id) return httpError(c, 400, "Missing product id");
 
   const db = firestoreFromEnv(c.env);
   const product = await db.getDoc<Product>(`${collections.products}/${id}`);
   if (!product || product.status === "removed") {
-    return c.json({ error: "Product not found" }, 404);
+    return httpError(c, 404, "Product not found");
   }
   if (product.sellerId !== user.uid) {
-    return c.json({ error: "Only the seller can view bids" }, 403);
+    return httpError(c, 403, "Only the seller can view bids");
   }
 
   const bids = await db.queryCollection<Bid>(collections.bids, {
@@ -175,8 +176,14 @@ productBidRoutes.get("/:id/bids/all", authMiddleware, async (c) => {
         currency: bid.currency,
         createdAt: bid.createdAt,
         buyer: buyer
-          ? { uid: buyer.uid, name: buyer.name, photoUrl: buyer.photoUrl }
-          : { uid: bid.buyerId, name: "Unknown", photoUrl: null },
+          ? {
+              uid: buyer.uid,
+              name: buyer.name,
+              photoUrl: buyer.photoUrl,
+              avgRating: buyer.avgRating ?? null,
+              ratingCount: buyer.ratingCount ?? 0,
+            }
+          : { uid: bid.buyerId, name: "Unknown", photoUrl: null, avgRating: null, ratingCount: 0 },
       };
     }),
   );

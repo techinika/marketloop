@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
 import { firestoreFromEnv } from "../lib/firestore";
+import { httpError } from "../lib/http";
 import { createNotification } from "../lib/notify";
 import { paypackFromEnv } from "../lib/paypack";
 import { pesapalFromEnv } from "../lib/pesapal";
@@ -42,7 +43,7 @@ webhookRoutes.post("/paypack", async (c) => {
   const valid = await paypackFromEnv(c.env).verifyWebhookSignature(rawBody, signature);
   if (!valid) {
     console.error("Paypack webhook: signature verification failed.");
-    return c.json({ error: "Invalid signature" }, 401);
+    return httpError(c, 401, "Invalid signature");
   }
 
   let event: {
@@ -54,7 +55,7 @@ webhookRoutes.post("/paypack", async (c) => {
   try {
     event = JSON.parse(rawBody);
   } catch {
-    return c.json({ error: "Invalid webhook body" }, 400);
+    return httpError(c, 400, "Invalid webhook body");
   }
 
   const ref = typeof event.ref === "string" ? event.ref : null;
@@ -65,7 +66,7 @@ webhookRoutes.post("/paypack", async (c) => {
     // Cashouts (withdrawals/refunds) don't change order state; just ack.
     return c.json({ status: 200 });
   }
-  if (!ref) return c.json({ error: "Missing ref" }, 400);
+  if (!ref) return httpError(c, 400, "Missing ref");
 
   const db = firestoreFromEnv(c.env);
   const now = new Date().toISOString();

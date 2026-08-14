@@ -6,6 +6,7 @@ export const collections = {
   products: "products",
   bids: "bids",
   orders: "orders",
+  messages: "messages",
   walletTransactions: "walletTransactions",
   platform: "platform",
   notifications: "notifications",
@@ -38,6 +39,10 @@ export type EscrowStatus =
   | "failed";
 export type WalletTransactionType = "credit" | "debit" | "refund";
 
+/** Identity-verification workflow state (informational, never gates selling). */
+export type VerificationStatus = "unverified" | "pending" | "verified" | "rejected";
+export type IdDocumentType = "national_id" | "passport" | "drivers_license";
+
 /** users/{uid} */
 export interface User {
   uid: string;
@@ -49,8 +54,24 @@ export interface User {
   createdAt: string;
   updatedAt?: string;
   rating: number | null;
+  /** Average rating received across transactions (1-5). Null until first rating. */
+  avgRating?: number | null;
+  /** Number of ratings received across transactions. */
+  ratingCount?: number;
   /** Admin flag, set manually in Firestore (no self-serve admin signup). */
   isAdmin?: boolean;
+  /** ISO timestamp when the phone number was verified by OTP. Absent until then. */
+  phoneVerifiedAt?: string | null;
+  /** Which document the user uploaded for identity verification. */
+  idDocumentType?: IdDocumentType | null;
+  /** R2 key of the uploaded ID document (under `id-documents/{uid}/`). */
+  idDocumentKey?: string | null;
+  /** Identity-verification workflow state. */
+  verificationStatus?: VerificationStatus;
+  verificationSubmittedAt?: string | null;
+  verificationReviewedAt?: string | null;
+  /** Admin note set when a submission is rejected (visible to the user). */
+  verificationNote?: string | null;
 }
 
 /** products/{productId} */
@@ -59,6 +80,8 @@ export interface Product {
   title: string;
   description: string;
   category: string;
+  /** Lowercased, deduped words of `title` (len >= 2) for Firestore prefix search. */
+  titleKeywords: string[];
   priceAmount: number;
   priceCurrency: Currency;
   isNegotiable: boolean;
@@ -88,6 +111,24 @@ export interface Bid {
   updatedAt: string;
 }
 
+/** A single order-thread message. */
+export interface Feedback {
+  /** 1-5, how was this transaction/counterpart (not the product). */
+  rating: number;
+  comment: string | null;
+  submittedAt: string;
+}
+
+/** messages/{messageId} — per-order buyer/seller chat thread. */
+export interface Message {
+  orderId: string;
+  senderId: string;
+  senderRole: "buyer" | "seller";
+  text: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
 /** orders/{orderId} */
 export interface Order {
   productId: string;
@@ -110,6 +151,13 @@ export interface Order {
   sellerConfirmedDelivery: boolean;
   /** Set when payment confirms: now + 5 days. Empty until then. */
   deliveryDeadline: string;
+  /** Rating + comment the buyer gave about the seller once confirmed (null until then). */
+  buyerFeedback?: Feedback | null;
+  /** Rating + comment the seller gave about the buyer once confirmed (null until then). */
+  sellerFeedback?: Feedback | null;
+  /** Set when either party reports the delivery as NOT satisfactory (received=false). */
+  hasDispute?: boolean;
+  disputeReason?: string | null;
   createdAt: string;
   updatedAt: string;
   /** Admin audit trail (mark-refunded / force-release actions). */

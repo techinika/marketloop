@@ -89,6 +89,8 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     ? (JSON.parse(String(init?.body)) as {
         fields?: Record<string, FirestoreField>;
         name?: string;
+        documents?: string[];
+        newTransaction?: unknown;
         structuredQuery?: {
           from: Array<{ collectionId: string }>;
           where?: {
@@ -136,6 +138,16 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     return jsonResponse(entries.map(([path, doc]) => ({ document: docJson(path, doc), readTime: TIME })));
   }
 
+  if (method === "POST" && rest.endsWith(":batchGet")) {
+    const documents = (body as { documents?: string[] }).documents ?? [];
+    const responses = documents.map((name) => {
+      const path = name.split("/documents/")[1] ?? name;
+      const doc = store.get(path);
+      return doc ? { found: docJson(path, doc), readTime: TIME } : { missing: name, readTime: TIME };
+    });
+    return jsonResponse({ responses });
+  }
+
   if (method === "POST" && !rest.includes("/")) {
     const documentId = url.searchParams.get("documentId") ?? `auto-${++autoCounter}`;
     const path = `${rest}/${documentId}`;
@@ -166,6 +178,22 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
 const fakeImages: R2Bucket = {
   get: async () => null,
 } as unknown as R2Bucket;
+
+// In-memory KV for phone-verification OTP codes.
+const kvStore = new Map<string, string>();
+const fakeKV: KVNamespace = {
+  get: async (key: string, type?: "text" | "json") => {
+    const value = kvStore.get(key);
+    if (value === undefined) return null;
+    return type === "json" ? (JSON.parse(value) as unknown) : value;
+  },
+  put: async (key: string, value: string | ArrayBuffer | ReadableStream) => {
+    kvStore.set(key, String(value));
+  },
+  delete: async (key: string) => {
+    kvStore.delete(key);
+  },
+} as unknown as KVNamespace;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);
@@ -246,6 +274,7 @@ async function main(): Promise<void> {
   try {
     const env = {
       IMAGES: fakeImages,
+      OTP_KV: fakeKV,
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",

@@ -1,13 +1,17 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 
-import { firestoreFromEnv, type WithId } from "../lib/firestore";
+import { firestoreFromEnv, type QueryFilter, type WithId } from "../lib/firestore";
 import { releaseToSeller } from "../lib/escrow";
+import { httpError } from "../lib/http";
+import { listMessages } from "../lib/messages";
 import { createNotification } from "../lib/notify";
+import { presignUrl } from "../lib/r2-presign";
 import { adminAuthMiddleware } from "../middleware/admin";
 import type { AuthUser } from "../lib/firebase-auth";
 import {
   collections,
+  type IdDocumentType,
   type Order,
   type Product,
   type User,
@@ -26,15 +30,28 @@ adminRoutes.use("*", adminAuthMiddleware);
 
 const REMINDER_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** True when an order needs an admin's eyes: USD refunds waiting on the
- * provider, or held orders approaching their delivery deadline. */
+/** True when an order needs an admin's eyes: a party reported a dispute,
+ * USD refunds waiting on the provider, or held orders approaching their
+ * delivery deadline. Disputes are pinned above the others. */
 function needsAttentionFor(order: Order & { id: string }): boolean {
+  if (order.hasDispute === true) return true;
   if (order.escrowStatus === "refund_requested" && order.currency === "USD") return true;
   if (order.escrowStatus === "held" && order.deliveryDeadline) {
     const ms = new Date(order.deliveryDeadline).getTime() - Date.now();
     if (ms > 0 && ms <= REMINDER_WINDOW_MS) return true;
   }
   return false;
+}
+
+/** Disputes outrank refunds and deadline reminders in the attention sort. */
+function attentionRank(order: Order & { id: string }): number {
+  if (order.hasDispute === true) return 2;
+  if (order.escrowStatus === "refund_requested" && order.currency === "USD") return 1;
+  if (order.escrowStatus === "held" && order.deliveryDeadline) {
+    const ms = new Date(order.deliveryDeadline).getTime() - Date.now();
+    if (ms > 0 && ms <= REMINDER_WINDOW_MS) return 1;
+  }
+  return 0;
 }
 
 async function parseBody(c: Context<AdminRoutesEnv>): Promise<Record<string, unknown>> {
@@ -59,40 +76,48 @@ adminRoutes.get("/orders", async (c) => {
     limit: pageSize,
   });
 
-  const rows = await Promise.all(
-    orders.map(async (order) => {
-      const [buyer, seller, product] = await Promise.all([
-        db.getDoc<User>(`${collections.users}/${order.buyerId}`),
-        db.getDoc<User>(`${collections.users}/${order.sellerId}`),
-        db.getDoc<Product>(`${collections.products}/${order.productId}`),
-      ]);
-      return {
-        id: order.id,
-        escrowStatus: order.escrowStatus,
-        agreedAmount: order.agreedAmount,
-        totalPaid: order.totalPaid,
-        currency: order.currency,
-        deliveryFee: order.deliveryFee,
-        deliveryFeePayer: order.deliveryFeePayer,
-        paymentProvider: order.paymentProvider,
-        paymentReference: order.paymentReference,
-        createdAt: order.createdAt,
-        deliveryDeadline: order.deliveryDeadline,
-        buyer: buyer
-          ? { uid: buyer.uid, name: buyer.name, email: buyer.email }
-          : { uid: order.buyerId, name: "Unknown", email: null },
-        seller: seller
-          ? { uid: seller.uid, name: seller.name, email: seller.email }
-          : { uid: order.sellerId, name: "Unknown", email: null },
-        product: product
-          ? { id: product.id, title: product.title }
-          : { id: order.productId, title: "Unknown" },
-        needsAttention: needsAttentionFor(order),
-      };
-    }),
-  );
+  // Batch-read the referenced users + products once instead of 3 GETs per order.
+  const [buyers, sellers, products] = await Promise.all([
+    db.getManyDocs<User>([...new Set(orders.map((o) => o.buyerId))].map((id) => `${collections.users}/${id}`)),
+    db.getManyDocs<User>([...new Set(orders.map((o) => o.sellerId))].map((id) => `${collections.users}/${id}`)),
+    db.getManyDocs<Product>([...new Set(orders.map((o) => o.productId))].map((id) => `${collections.products}/${id}`)),
+  ]);
 
-  rows.sort((a, b) => Number(b.needsAttention) - Number(a.needsAttention));
+  const rows = orders.map((order) => {
+    const buyer = buyers.get(order.buyerId) ?? null;
+    const seller = sellers.get(order.sellerId) ?? null;
+    const product = products.get(order.productId) ?? null;
+    return {
+      id: order.id,
+      escrowStatus: order.escrowStatus,
+      agreedAmount: order.agreedAmount,
+      totalPaid: order.totalPaid,
+      currency: order.currency,
+      deliveryFee: order.deliveryFee,
+      deliveryFeePayer: order.deliveryFeePayer,
+      paymentProvider: order.paymentProvider,
+      paymentReference: order.paymentReference,
+      createdAt: order.createdAt,
+      deliveryDeadline: order.deliveryDeadline,
+      hasDispute: order.hasDispute === true,
+      disputeReason: order.hasDispute === true ? (order.disputeReason ?? null) : null,
+      buyer: buyer
+        ? { uid: buyer.uid, name: buyer.name, email: buyer.email }
+        : { uid: order.buyerId, name: "Unknown", email: null },
+      seller: seller
+        ? { uid: seller.uid, name: seller.name, email: seller.email }
+        : { uid: order.sellerId, name: "Unknown", email: null },
+      product: product
+        ? { id: product.id, title: product.title }
+        : { id: order.productId, title: "Unknown" },
+      needsAttention: needsAttentionFor(order),
+      attentionRank: attentionRank(order),
+    };
+  });
+
+  rows.sort(
+    (a, b) => b.attentionRank - a.attentionRank || a.createdAt.localeCompare(b.createdAt),
+  );
 
   return c.json({ orders: rows, page, pageSize });
 });
@@ -100,22 +125,23 @@ adminRoutes.get("/orders", async (c) => {
 /** GET /admin/orders/:id — full order detail plus linked wallet transactions. */
 adminRoutes.get("/orders/:id", async (c) => {
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing order id" }, 400);
+  if (!id) return httpError(c, 400, "Missing order id");
 
   const db = firestoreFromEnv(c.env);
   const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
-  if (!order) return c.json({ error: "Order not found" }, 404);
+  if (!order) return httpError(c, 404, "Order not found");
 
-  const [product, buyer, seller, transactions] = await Promise.all([
+  const [product, buyer, seller, transactions, thread] = await Promise.all([
     db.getDoc<Product>(`${collections.products}/${order.productId}`),
     db.getDoc<User>(`${collections.users}/${order.buyerId}`),
     db.getDoc<User>(`${collections.users}/${order.sellerId}`),
     db.queryCollection<WalletTransaction>(collections.walletTransactions, {
       filters: [{ field: "orderId", op: "==", value: order.id }],
     }),
+    listMessages(c.env, order.id, { limit: 200 }),
   ]);
 
-  return c.json({ order, product, buyer, seller, transactions });
+  return c.json({ order, product, buyer, seller, transactions, messages: thread.messages });
 });
 
 /**
@@ -126,15 +152,15 @@ adminRoutes.get("/orders/:id", async (c) => {
  */
 adminRoutes.post("/orders/:id/mark-refunded", async (c) => {
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing order id" }, 400);
+  if (!id) return httpError(c, 400, "Missing order id");
   const body = await parseBody(c);
   const adminNote = typeof body.adminNote === "string" ? body.adminNote.trim() : "";
 
   const db = firestoreFromEnv(c.env);
   const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
-  if (!order) return c.json({ error: "Order not found" }, 404);
+  if (!order) return httpError(c, 404, "Order not found");
   if (order.escrowStatus !== "refund_requested") {
-    return c.json({ error: "Only refund_requested orders can be marked refunded" }, 409);
+    return httpError(c, 409, "Only refund_requested orders can be marked refunded");
   }
 
   const now = new Date().toISOString();
@@ -196,18 +222,18 @@ adminRoutes.post("/orders/:id/mark-refunded", async (c) => {
  */
 adminRoutes.post("/orders/:id/force-release", async (c) => {
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing order id" }, 400);
+  if (!id) return httpError(c, 400, "Missing order id");
   const body = await parseBody(c);
   const adminNote = typeof body.adminNote === "string" ? body.adminNote.trim() : "";
   if (!adminNote) {
-    return c.json({ error: "adminNote is required to force-release funds" }, 400);
+    return httpError(c, 400, "adminNote is required to force-release funds");
   }
 
   const db = firestoreFromEnv(c.env);
   const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
-  if (!order) return c.json({ error: "Order not found" }, 404);
+  if (!order) return httpError(c, 404, "Order not found");
   if (order.escrowStatus !== "held") {
-    return c.json({ error: "Only held orders can be force-released" }, 409);
+    return httpError(c, 409, "Only held orders can be force-released");
   }
 
   const now = new Date().toISOString();
@@ -319,4 +345,134 @@ adminRoutes.get("/stats", async (c) => {
     refundAttention: refundAttention + heldNeedAttention,
     gmvThisMonth,
   });
+});
+
+const PRESIGN_TTL_SECONDS = 15 * 60;
+
+async function presignDocumentUrl(
+  env: Env,
+  key: string,
+): Promise<string | null> {
+  const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME } = env;
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
+    return null;
+  }
+  const presigned = await presignUrl(
+    {
+      accountId: R2_ACCOUNT_ID,
+      accessKeyId: R2_ACCESS_KEY_ID,
+      secretAccessKey: R2_SECRET_ACCESS_KEY,
+    },
+    { method: "GET", bucket: R2_BUCKET_NAME, key, expiresInSeconds: PRESIGN_TTL_SECONDS },
+  );
+  return presigned.url;
+}
+
+/** GET /admin/verifications/pending — identity submissions awaiting review.
+ * Pass `limit` (max 100) and `before` (a createdAt cursor) to page. */
+adminRoutes.get("/verifications/pending", async (c) => {
+  const db = firestoreFromEnv(c.env);
+
+  const limitRaw = Number(c.req.query("limit") ?? "");
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.floor(limitRaw)) : undefined;
+  const before = c.req.query("before") ?? undefined;
+
+  const filters: QueryFilter[] = [{ field: "verificationStatus", op: "==", value: "pending" }];
+  if (before) filters.push({ field: "createdAt", op: "<", value: before });
+
+  const users = await db.queryCollection<User>(collections.users, {
+    filters,
+    orderBy: { field: "createdAt", direction: "ASCENDING" },
+    limit,
+  });
+
+  const rows = await Promise.all(
+    users.map(async (user) => ({
+      uid: user.uid,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      photoUrl: user.photoUrl,
+      phoneVerified: Boolean(user.phoneVerifiedAt),
+      idDocumentType: (user.idDocumentType ?? null) as IdDocumentType | null,
+      verificationSubmittedAt: user.verificationSubmittedAt ?? null,
+      createdAt: user.createdAt,
+      documentUrl: user.idDocumentKey
+        ? await presignDocumentUrl(c.env, user.idDocumentKey)
+        : null,
+    })),
+  );
+
+  return c.json({
+    verifications: rows,
+    ...(limit && rows.length === limit
+      ? { nextPageToken: rows[rows.length - 1]!.createdAt }
+      : {}),
+  });
+});
+
+/**
+ * POST /admin/verifications/:uid/approve — marks a submission as verified and
+ * notifies the user. Informational only: approval never gates selling.
+ */
+adminRoutes.post("/verifications/:uid/approve", async (c) => {
+  const uid = c.req.param("uid");
+  const db = firestoreFromEnv(c.env);
+  const user = await db.getDoc<User>(`${collections.users}/${uid}`);
+  if (!user) return httpError(c, 404, "User not found");
+  if (user.verificationStatus !== "pending") {
+    return httpError(c, 409, "Only pending submissions can be approved");
+  }
+
+  const now = new Date().toISOString();
+  const updated = await db.updateDoc<User>(`${collections.users}/${uid}`, {
+    verificationStatus: "verified",
+    verificationReviewedAt: now,
+    verificationNote: null,
+    updatedAt: now,
+  });
+
+  await createNotification(
+    c.env,
+    uid,
+    "verification_approved",
+    "Identity verified",
+    "Your identity document was approved. A verified badge now shows on your profile.",
+  );
+
+  return c.json({ user: updated });
+});
+
+/** POST /admin/verifications/:uid/reject — rejects a submission with a reason. */
+adminRoutes.post("/verifications/:uid/reject", async (c) => {
+  const uid = c.req.param("uid");
+  const body = await parseBody(c);
+  const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+  if (!reason) return httpError(c, 400, "reason is required to reject a submission");
+
+  const db = firestoreFromEnv(c.env);
+  const user = await db.getDoc<User>(`${collections.users}/${uid}`);
+  if (!user) return httpError(c, 404, "User not found");
+  if (user.verificationStatus !== "pending") {
+    return httpError(c, 409, "Only pending submissions can be rejected");
+  }
+
+  const now = new Date().toISOString();
+  const updated = await db.updateDoc<User>(`${collections.users}/${uid}`, {
+    verificationStatus: "rejected",
+    verificationReviewedAt: now,
+    verificationNote: reason,
+    updatedAt: now,
+  });
+
+  await createNotification(
+    c.env,
+    uid,
+    "verification_rejected",
+    "Identity verification needs attention",
+    `Your ID document was rejected: ${reason}. You can resubmit from your Verification page.`,
+  );
+
+  return c.json({ user: updated });
 });

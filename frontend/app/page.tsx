@@ -1,7 +1,15 @@
+import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import Link from "next/link";
 
 import { HeroIllustration } from "@/components/HeroIllustration";
+
+export const metadata: Metadata = {
+  title: "MarketLoop — Buy and sell used goods safely in Rwanda",
+  description:
+    "MarketLoop is a peer-to-peer second-hand marketplace where every payment is held in escrow until delivery is confirmed. Buy and sell used phones, electronics, furniture and more in Rwanda.",
+  alternates: { canonical: "/" },
+};
 
 const TRUST_ITEMS = [
   {

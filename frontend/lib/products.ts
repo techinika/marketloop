@@ -1,10 +1,12 @@
-import { apiFetch, publicFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { publicFetch } from "@/lib/publicApi";
 import type {
   Bid,
   BidSummary,
   CheckoutInfo,
   Currency,
   DeliveryFeePayer,
+  FeedSortBy,
   MyBidRow,
   Product,
   ProductDetail,
@@ -31,6 +33,11 @@ export interface FeedFilters {
   category?: string;
   currency?: Currency;
   isBiddingEnabled?: boolean;
+  /** Free-text keyword search against the title (case-insensitive). */
+  search?: string;
+  priceMin?: number;
+  priceMax?: number;
+  sortBy?: FeedSortBy;
   page?: number;
   pageSize?: number;
 }
@@ -44,7 +51,7 @@ export async function createProduct(input: ProductInput): Promise<Product> {
   return res.product;
 }
 
-/** Public Explore feed, newest-first with filters + pagination. */
+/** Public Explore feed with filters + pagination. */
 export async function fetchFeed(filters: FeedFilters = {}): Promise<ProductFeed> {
   const params = new URLSearchParams();
   if (filters.category) params.set("category", filters.category);
@@ -52,6 +59,10 @@ export async function fetchFeed(filters: FeedFilters = {}): Promise<ProductFeed>
   if (filters.isBiddingEnabled !== undefined) {
     params.set("isBiddingEnabled", String(filters.isBiddingEnabled));
   }
+  if (filters.search) params.set("search", filters.search);
+  if (filters.priceMin !== undefined) params.set("priceMin", String(filters.priceMin));
+  if (filters.priceMax !== undefined) params.set("priceMax", String(filters.priceMax));
+  if (filters.sortBy) params.set("sortBy", filters.sortBy);
   params.set("page", String(filters.page ?? 1));
   params.set("pageSize", String(filters.pageSize ?? 20));
   const qs = params.toString();

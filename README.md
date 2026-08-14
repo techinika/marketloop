@@ -13,7 +13,7 @@ PROJ/
 | Folder      | Purpose                                                                 |
 | ----------- | ----------------------------------------------------------------------- |
 | `frontend/` | Web app: UI, Google login (Firebase client SDK), product listing, Explore feed, bidding/buying, checkout, orders, wallet, in-app notifications, user dashboard, admin panel |
-| `workers/`  | API: auth, products, uploads/media, bids, orders (escrow), wallet, payment webhooks, notifications, admin, hourly refund cron. Talks to Firestore via its REST API |
+| `workers/`  | API: auth, products, uploads/media, bids, orders (escrow + per-order chat), wallet, payment webhooks, notifications, phone/identity verification, admin, hourly refund cron. Talks to Firestore via its REST API |
 
 ## Getting started
 
@@ -64,11 +64,23 @@ or via `wrangler secret put <NAME>` for deployed environments:
 
 R2 bucket binding: `IMAGES` (bucket `marketloop-images`) for product images/videos.
 
+KV namespace binding: `OTP_KV` for phone-verification codes (create it in the
+Cloudflare dashboard and paste its id into `wrangler.toml`).
+
+> `GET /health` validates that the required secrets and bindings above are
+> present and returns `500 { status: "degraded", problems }` listing anything
+> missing (see `workers/src/lib/env.ts`). A healthy deployment returns
+> `200 { status: "ok" }`.
+
+Phone-verification SMS is a **stub**: `workers/src/lib/sms.ts` logs the message
+to the console instead of sending it. Swap in a provider (Twilio / Africa's
+Talking / Termii / Vonage) by editing `sendSms` — no caller changes.
+
 ### API routes
 
 | Route                    | Auth   | Description |
 | ------------------------ | ------ | ----------- |
-| `GET /health`            | public | Health check |
+| `GET /health`            | public | Health check; validates required secrets/bindings, reports `{ status: "degraded", problems }` (500) when any are missing |
 | `GET /auth/me`           | user   | Current user from verified ID token; includes `isAdmin` (true only when the Firestore profile has `isAdmin: true`) |
 | `POST /uploads/presign`  | user   | Returns presigned PUT URLs for direct R2 uploads (images ≤5MB each / max 6, video ≤50MB / max 1) |
 | `GET /media/{key}`       | public | Serves an R2 object by key |
@@ -82,16 +94,26 @@ R2 bucket binding: `IMAGES` (bucket `marketloop-images`) for product images/vide
 | `GET /products/{id}/bids/mine`  | user   | The caller's own active offer on the product, or `null` |
 | `GET /products/{id}/bids/all`   | seller | All active offers + bidder name/photo, highest first (403 for non-sellers) |
 | `POST /products/{id}/reserve`   | user   | Direct buy on a non-bidding product: reserves it 15 min and returns `checkout` info (idempotent for the same buyer) |
-| `GET /bids/mine`        | user   | All of the caller's offers across products, newest first, with product info |
+| `GET /bids/mine`        | user   | All of the caller's offers across products, newest first, with product info (`limit` max 100 + `before` cursor, see `/wallet`) |
 | `POST /bids/{bidId}/accept`   | seller | Accept an offer: it becomes `accepted`, others are withdrawn, product is reserved; returns `checkout` info |
 | `POST /bids/{bidId}/withdraw` | buyer  | Withdraw the caller's own active offer |
 | `POST /orders`              | buyer  | Starts payment for the caller's reservation. RWF: Paypack cashin to `phoneNumber`, returns the order; USD: Pesapal hosted page, returns `redirect_url`. `totalPaid = agreedAmount + deliveryFee`. Dedupes a pending order and reuses a failed one |
 | `GET /orders/{id}`          | buyer/seller | Order detail + product/party summaries; used for frontend polling after payment |
+| `GET /orders/{id}/messages` | buyer/seller | Order-thread chat messages (chronological) |
+| `POST /orders/{id}/messages` | buyer/seller | Append a message to the order thread |
+| `POST /orders/{id}/messages/read` | buyer/seller | Marks the caller's incoming messages as read |
+| `GET /orders/{id}/can-confirm` | buyer/seller | Whether the caller can still confirm delivery (deadline not passed, status `held`) |
 | `POST /orders/{id}/confirm-delivery` | buyer/seller | Records the caller's confirmation. When **both** confirm, escrow is released and the seller's wallet is credited |
 | `GET /orders/mine`        | user   | All of the caller's purchases, newest first, with product summary (dashboard) |
 | `GET /orders/sales`       | user   | All of the caller's sales, newest first, with product + buyer summary (dashboard) |
-| `GET /wallet`               | user   | The caller's balance + transaction history (newest first) |
+| `GET /wallet`               | user   | The caller's balance + transaction history (newest first). Pass `limit` (max 100) and `before` (a `createdAt` ISO cursor from a previous `nextPageToken`) to page backwards; omitted params return everything |
 | `POST /wallet/withdraw`     | user   | RWF withdrawal via Paypack cashout to a MoMo number (debit-first; balance restored + transaction reclassified if the cashout fails) |
+| `POST /verifications/phone/request` | user | Sends a 6-digit OTP by SMS to a phone number (60s resend limit, 10-min expiry; code lives in `OTP_KV`) |
+| `POST /verifications/phone/confirm` | user | Checks the OTP (max 5 tries, single-use) and marks the phone verified on the profile |
+| `POST /verifications/id/presign` | user | Presigned PUT URL for an ID-document image (≤5MB, jpg/png/webp), stored under `id-documents/{uid}/` (not publicly served) |
+| `POST /verifications/id/request` | user | Submits the uploaded ID document for admin review (409 if already pending/verified) |
+| `GET /verifications/me`       | user | The caller's verification state (phone, `verificationStatus`, document type, review note) |
+| `POST /verifications/me/id/sign-url` | user | Signed GET URL for the caller's own ID document |
 | `POST /webhooks/paypack`    | public (HMAC) | Paypack status webhook. Signature-verified (`X-Paypack-Signature`). Successful CASHIN → order `held` + product `sold`; failed → order `failed` + product `active` |
 | `GET/POST /webhooks/pesapal-ipn` | public | Pesapal IPN. Polls the transaction by `orderTrackingId`; `status_code` 1 = held+sold, 2/3 = failed+active. Responds with Pesapal's expected IPN JSON |
 | `GET /notifications`       | user   | The caller's in-app notifications, newest first (`page`/`pageSize`) |
@@ -103,6 +125,9 @@ R2 bucket binding: `IMAGES` (bucket `marketloop-images`) for product images/vide
 | `POST /admin/orders/{id}/force-release` | admin | Releases escrow to the seller without both-party confirmation (`held` only; non-empty `adminNote` required) |
 | `GET /admin/users`         | admin  | Paginated user list with wallet balance, isAdmin flag, product/order counts; `search` by name/email |
 | `GET /admin/stats`         | admin  | Active listings, pending/held orders, refund-attention count, GMV this month (RWF + USD) |
+| `GET /admin/verifications/pending` | admin | Identity submissions awaiting review, oldest first (`limit` max 100 + `before` cursor) |
+| `POST /admin/verifications/{uid}/approve` | admin | Marks a pending submission `verified` (409 otherwise) and notifies the user |
+| `POST /admin/verifications/{uid}/reject` | admin | Rejects a pending submission with a required `reason` and notifies the user |
 
 A "needs attention" order (`GET /admin/orders`) is one that is `refund_requested` in USD
 (awaiting manual provider refund) or `held` within 24h of its delivery deadline without
@@ -116,9 +141,11 @@ back immediately (`refunded`); Pesapal only accepts a refund *request*
 (`refund_requested` — finalized by their finance team, then confirmed by an admin via
 mark-refunded). Products are reverted to `active` and their reservation cleared.
 
-> Note: `GET /products` uses `WHERE status == "active" ORDER BY createdAt DESC`, which
-> requires a composite index (`status ASC, createdAt DESC`) in a real Firestore project.
-> Create it in the Firebase console or the feed will fail with a missing-index error.
+> Note: several queries need **composite indexes** in a real Firestore project
+> (e.g. `GET /products` uses `status ASC, createdAt DESC`). The full required
+> list — including the cron's `orders (escrowStatus ASC, deliveryDeadline ASC)`
+> — is in [ARCHITECTURE.md](ARCHITECTURE.md) → Composite indexes. Create them in
+> the Firebase console or the affected endpoints fail with a missing-index error.
 
 ## Pages
 
@@ -134,6 +161,7 @@ mark-refunded). Products are reverted to `active` and their reservation cleared.
 | `/checkout/[productId]` | Real checkout for a reserved item: RWF shows a mobile-money number field (Paypack sends a payment request to that phone; the page polls until payment confirms) · USD redirects to the Pesapal hosted page |
 | `/checkout/callback`    | Pesapal redirect landing page: polls the order until payment settles, then links to the order page |
 | `/orders/[id]`          | Order status in plain language (held in escrow / released / refunded / etc.), delivery-confirm buttons for both parties, and a 5-day countdown |
+| `/account/verification` | Identity verification: verify a phone number via OTP, then upload an ID document (national ID / passport / driving licence) for admin review — status badge + rejection reason |
 | `/wallet`               | Luma-style wallet: available balance, activity (sales/withdrawals/refunds), RWF withdrawal to mobile money |
 | `/dashboard`            | User dashboard: sales + purchases with escrow status, quick links to bids/wallet (see header account menu) |
 | `/admin`                | Admin overview: active listings, pending/held orders, refund attention, GMV this month (RWF + USD) |
@@ -166,12 +194,13 @@ Collections (see `workers/src/models.ts` and `frontend/types/index.ts`):
 
 | Collection            | Document id | Key fields |
 | --------------------- | ----------- | ---------- |
-| `users`               | `{uid}`     | uid, name, email, photoUrl, phone, walletBalance, isAdmin?, createdAt, updatedAt?, rating |
+| `users`               | `{uid}`     | uid, name, email, photoUrl, phone, phoneVerifiedAt?, walletBalance, isAdmin?, rating, avgRating?, ratingCount?, verificationStatus (unverified/pending/verified/rejected), idDocumentType?, idDocumentKey?, verificationSubmittedAt?, verificationReviewedAt?, verificationNote?, createdAt, updatedAt? |
 | `products`            | `{productId}` | sellerId, title, description, category, priceAmount, priceCurrency (USD/RWF), isNegotiable, isBiddingEnabled, conditionNote, images[], videoUrl, deliveryFee, deliveryFeePayer, status, reservedBy, reservedUntil, createdAt, updatedAt |
 | `bids`                | `{bidId}`   | productId, buyerId, amount, currency, status (active/withdrawn/accepted), createdAt, updatedAt |
-| `orders`              | `{orderId}` | productId, sellerId, buyerId, agreedAmount, currency, deliveryFee, deliveryFeePayer, totalPaid (= agreedAmount + deliveryFee, always charged to the buyer), paymentProvider (paypack/pesapal), paymentReference, buyerPhoneNumber, escrowStatus (pending_payment/held/released/refunded/refund_requested/failed), buyerConfirmedDelivery, sellerConfirmedDelivery, deliveryDeadline, createdAt, updatedAt, adminAction/adminNote/adminUid/adminActionAt? (set by manual admin actions) |
+| `orders`              | `{orderId}` | productId, sellerId, buyerId, agreedAmount, currency, deliveryFee, deliveryFeePayer, totalPaid (= agreedAmount + deliveryFee, always charged to the buyer), paymentProvider (paypack/pesapal), paymentReference, buyerPhoneNumber, escrowStatus (pending_payment/held/released/refunded/refund_requested/failed), buyerConfirmedDelivery, sellerConfirmedDelivery, deliveryDeadline, buyerFeedback?, sellerFeedback? (rating 1-5 + comment), hasDispute?, disputeReason?, createdAt, updatedAt, adminAction/adminNote/adminUid/adminActionAt? (set by manual admin actions) |
+| `messages`            | `{messageId}` | orderId, senderId, senderRole (buyer/seller), text, isRead, createdAt — per-order chat thread |
 | `walletTransactions`  | `{txId}`    | userId, orderId, type (credit/debit/refund), amount, currency, createdAt |
-| `notifications`       | `{notificationId}` | userId, type (bid_placed/bid_accepted/bid_not_selected/payment_held/escrow_released/order_refunded/delivery_deadline), title, message, relatedOrderId, relatedProductId, isRead, createdAt |
+| `notifications`       | `{notificationId}` | userId, type (bid_placed/bid_accepted/bid_not_selected/payment_held/escrow_released/order_refunded/delivery_deadline/verification_approved/verification_rejected), title, message, relatedOrderId, relatedProductId, isRead, createdAt |
 | `platform`            | `pesapal-ipn` | notificationId, url, createdAt — cached Pesapal IPN registration |
 
 **Escrow money flow** (see `workers/src/lib/escrow.ts`): the buyer always pays
@@ -181,7 +210,9 @@ seller absorbs the courier and receives `agreedAmount - deliveryFee`.
 
 The Workers API talks to Firestore via its REST API (`workers/src/lib/firestore.ts`),
 authenticating with a manually-signed service-account JWT. Typed helpers:
-`getDoc`, `createDoc`, `updateDoc`, `queryCollection`.
+`getDoc`, `createDoc`, `updateDoc`, `queryCollection`, `getManyDocs`
+(batch `documents:batchGet`, chunked at 10 — use it instead of per-item read
+loops in list endpoints).
 
 ## Seeding sample data
 
@@ -239,6 +270,12 @@ npm test
   (idempotent, audited, product reactivation), force-release (note required,
   wallet credit), users list + search, stats, and the `/orders/mine` +
   `/orders/sales` dashboard endpoints.
+- `npm run test:verifications` — full Hono app against mock JWKS + mock
+  Firestore + mock KV: OTP request (rate limit) / confirm (single-use, max
+  attempts, wrong-code) + phone verified on profile, ID presign (type/size
+  validation, key prefix) + submit (conflict guards), `/verifications/me`,
+  admin pending list (with pagination) + approve/reject (conflict guards +
+  notifications).
 
 ## Current status
 
@@ -264,6 +301,13 @@ npm test
 - [x] In-app notifications: bell + unread badge (30s/focus polling), mark-read, event triggers across bidding/payment/escrow/refunds + 24h delivery-deadline warnings
 - [x] User dashboard (`/dashboard`): sales + purchases with escrow status
 - [x] Admin panel: isAdmin-gated overview/stats, order oversight (needs-attention pinned), mark-refunded + force-release (audited), user search
-- [x] Backend + frontend tests/lint/build green (workers 9 suites, frontend lint + build)
+- [x] Phone + identity verification: OTP by SMS (KV-backed) + ID-document upload → admin review → verified badge (informational, never gates selling)
+- [x] Per-order buyer/seller chat (`messages` collection)
+- [x] SEO: sitemap + robots, per-route metadata/canonical/OpenGraph, product JSON-LD, `not-found`/`error`/`global-error`/loading boundaries, semantic headings, `next/image`
+- [x] Performance: `getManyDocs` batch reads (kills N+1 in list endpoints), 30s TTL caching on feed + detail, opt-in `limit`/`before` pagination, client-side image downscaling to WebP before upload
+- [x] Config validation: `/health` reports missing secrets/bindings as `degraded`; hand-rolled validators + flat `{ error }` contract
+- [x] `ARCHITECTURE.md` documenting decisions + the required Firestore composite indexes
+- [x] Backend + frontend tests/lint/build green (workers 10 suites, frontend lint + build)
 - [ ] Disputes UI (hold disputed orders for manual review) — future scope
+- [ ] Real SMS provider wired into `workers/src/lib/sms.ts` (currently logs to console)
 - [ ] Real Paypack/Pesapal credentials + production webhook secrets required for end-to-end payments

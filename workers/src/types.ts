@@ -2,6 +2,8 @@ import type { AuthUser } from "./lib/firebase-auth";
 
 export interface Env {
   IMAGES: R2Bucket;
+  /** KV namespace for phone-verification OTP codes (see wrangler.toml). */
+  OTP_KV: KVNamespace;
   /** Custom S3 API credentials for R2 presigned uploads (secrets). */
   R2_ACCOUNT_ID?: string;
   R2_ACCESS_KEY_ID?: string;

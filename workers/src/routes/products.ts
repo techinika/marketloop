@@ -1,7 +1,17 @@
 import { Hono } from "hono";
 
 import { RESERVATION_HOLD_MS, refreshExpiredReservation } from "../lib/bids";
+import { cacheGet, cachePut } from "../lib/cache";
 import { firestoreFromEnv, type QueryFilter } from "../lib/firestore";
+import { httpError } from "../lib/http";
+import { titleKeywords } from "../lib/title-keywords";
+import {
+  asBoolean,
+  asNumber,
+  asOneOf,
+  asString,
+  BadRequestError,
+} from "../lib/validation";
 import { authMiddleware } from "../middleware/auth";
 import {
   CATEGORIES,
@@ -24,60 +34,44 @@ const MAX_PRICE = 999_999_999;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
 
-class BadRequestError extends Error {}
-
-function asString(
-  value: unknown,
-  label: string,
-  max: number,
-  min = 1,
-): string {
-  if (typeof value !== "string" || value.length < min || value.length > max) {
-    throw new BadRequestError(`${label} must be a string of ${min}-${max} characters`);
-  }
-  return value;
-}
-
-function asBoolean(value: unknown, label: string, fallback?: boolean): boolean {
-  if (value === undefined && fallback !== undefined) return fallback;
-  if (typeof value !== "boolean") throw new BadRequestError(`${label} must be a boolean`);
-  return value;
-}
-
-function asNumber(value: unknown, label: string, min: number, max: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < min || value > max) {
-    throw new BadRequestError(`${label} must be a number between ${min} and ${max}`);
-  }
-  return value;
-}
-
 function asCategory(value: unknown): string {
-  const category = asString(value, "category", 50);
-  if (!(CATEGORIES as readonly string[]).includes(category)) {
-    throw new BadRequestError(`category is not supported: ${category}`);
-  }
-  return category;
+  return asOneOf(value, "category", CATEGORIES as readonly string[]);
 }
 
 function asCurrency(value: unknown): Currency {
-  if (value !== "USD" && value !== "RWF") {
-    throw new BadRequestError("priceCurrency must be USD or RWF");
-  }
-  return value;
+  return asOneOf(value, "priceCurrency", ["USD", "RWF"] as const);
 }
 
 function asDeliveryFeePayer(value: unknown): DeliveryFeePayer {
-  if (value !== "seller" && value !== "buyer") {
-    throw new BadRequestError("deliveryFeePayer must be seller or buyer");
-  }
-  return value;
+  return asOneOf(value, "deliveryFeePayer", ["seller", "buyer"] as const);
 }
 
 function asStatus(value: unknown): ProductStatus {
-  if (value !== "active" && value !== "sold" && value !== "reserved" && value !== "removed") {
-    throw new BadRequestError("status must be active, sold, reserved or removed");
+  return asOneOf(value, "status", ["active", "sold", "reserved", "removed"] as const);
+}
+
+const SORTS = ["newest", "price_asc", "price_desc"] as const;
+type SortBy = (typeof SORTS)[number];
+
+function asSortBy(value: unknown): SortBy | null {
+  if (value === undefined || value === "") return null;
+  return asOneOf(value, "sortBy", SORTS);
+}
+
+/**
+ * Lowercased, deduped title words (length >= 2) used for Firestore prefix
+ * search via `array-contains-any` on the `titleKeywords` field. Punctuation is
+ * dropped so "iPhone 12" -> ["iphone", "12"]. This is deliberately simple
+ * (exact keyword membership); Algolia/Typesense are the upgrade path if it
+ * ever becomes insufficient.
+ */
+function asPriceBound(value: string | undefined): number | null {
+  if (value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new BadRequestError("priceMin and priceMax must be non-negative numbers");
   }
-  return value;
+  return parsed;
 }
 
 function asImages(value: unknown): string[] {
@@ -107,16 +101,18 @@ productRoutes.post("/", authMiddleware, async (c) => {
   try {
     body = await c.req.json();
   } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    return httpError(c, 400, "Invalid JSON body");
   }
 
   try {
     const now = new Date().toISOString();
+    const title = asString(body.title, "title", MAX_TITLE);
     const product: Product = {
       sellerId: user.uid,
-      title: asString(body.title, "title", MAX_TITLE),
+      title,
       description: asString(body.description, "description", MAX_DESCRIPTION),
       category: asCategory(body.category),
+      titleKeywords: titleKeywords(title),
       priceAmount: asNumber(body.priceAmount, "priceAmount", 0.01, MAX_PRICE),
       priceCurrency: asCurrency(body.priceCurrency),
       isNegotiable: asBoolean(body.isNegotiable, "isNegotiable", false),
@@ -136,12 +132,17 @@ productRoutes.post("/", authMiddleware, async (c) => {
     const created = await db.createDoc<Product>(collections.products, undefined, product);
     return c.json({ product: created }, 201);
   } catch (err) {
-    if (err instanceof BadRequestError) return c.json({ error: err.message }, 400);
+    if (err instanceof BadRequestError) return httpError(c, 400, err.message);
     throw err;
   }
 });
 
 productRoutes.get("/", async (c) => {
+  // Short-TTL cache on the public feed (disabled in tests where `caches`
+  // doesn't exist). Keyed by the full URL so filters/search stay distinct.
+  const cached = await cacheGet<{ products: Array<Product & { id: string }>; page: number; pageSize: number; hasMore: boolean }>(c.req.url);
+  if (cached) return c.json(cached);
+
   const q = c.req.query();
   const category = q.category;
   const currency = q.currency;
@@ -153,24 +154,55 @@ productRoutes.get("/", async (c) => {
   );
 
   if (category && !(CATEGORIES as readonly string[]).includes(category)) {
-    return c.json({ error: `Unknown category: ${category}` }, 400);
+    return httpError(c, 400, `Unknown category: ${category}`);
   }
   if (currency && currency !== "USD" && currency !== "RWF") {
-    return c.json({ error: "currency must be USD or RWF" }, 400);
+    return httpError(c, 400, "currency must be USD or RWF");
   }
   if (bidding && bidding !== "true" && bidding !== "false") {
-    return c.json({ error: "isBiddingEnabled must be true or false" }, 400);
+    return httpError(c, 400, "isBiddingEnabled must be true or false");
+  }
+
+  let sortBy: SortBy | null;
+  let priceMin: number | null;
+  let priceMax: number | null;
+  try {
+    sortBy = asSortBy(q.sortBy);
+    priceMin = asPriceBound(q.priceMin);
+    priceMax = asPriceBound(q.priceMax);
+  } catch (err) {
+    if (err instanceof BadRequestError) return httpError(c, 400, err.message);
+    throw err;
+  }
+  if (priceMin !== null && priceMax !== null && priceMin > priceMax) {
+    return httpError(c, 400, "priceMin cannot be greater than priceMax");
   }
 
   const filters: QueryFilter[] = [{ field: "status", op: "==", value: "active" }];
   if (category) filters.push({ field: "category", op: "==", value: category });
   if (currency) filters.push({ field: "priceCurrency", op: "==", value: currency });
   if (bidding) filters.push({ field: "isBiddingEnabled", op: "==", value: bidding === "true" });
+  if (priceMin !== null) filters.push({ field: "priceAmount", op: ">=", value: priceMin });
+  if (priceMax !== null) filters.push({ field: "priceAmount", op: "<=", value: priceMax });
+
+  // Keyword search: `array-contains-any` matches any stored title keyword.
+  const search = (q.search ?? "").trim();
+  const keywords = search ? titleKeywords(search) : [];
+  if (keywords.length > 0) {
+    filters.push({ field: "titleKeywords", op: "array-contains-any", value: keywords });
+  }
+
+  const orderBy =
+    sortBy === "price_asc"
+      ? { field: "priceAmount", direction: "ASCENDING" as const }
+      : sortBy === "price_desc"
+        ? { field: "priceAmount", direction: "DESCENDING" as const }
+        : { field: "createdAt", direction: "DESCENDING" as const };
 
   const db = firestoreFromEnv(c.env);
   const products = await db.queryCollection<Product>(collections.products, {
     filters,
-    orderBy: { field: "createdAt", direction: "DESCENDING" },
+    orderBy,
     offset: (page - 1) * pageSize,
     limit: pageSize,
   });
@@ -179,7 +211,14 @@ productRoutes.get("/", async (c) => {
     products.map((product) => refreshExpiredReservation(db, product)),
   );
 
-  return c.json({ products: refreshed, page, pageSize, hasMore: refreshed.length === pageSize });
+  const payload = {
+    products: refreshed,
+    page,
+    pageSize,
+    hasMore: refreshed.length === pageSize,
+  };
+  await cachePut(c.req.url, payload, 30);
+  return c.json(payload);
 });
 
 /** GET /products/mine — the seller's own listings across all statuses. */
@@ -198,22 +237,43 @@ productRoutes.get("/mine", authMiddleware, async (c) => {
 
 productRoutes.get("/:id", async (c) => {
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing product id" }, 400);
+  if (!id) return httpError(c, 400, "Missing product id");
+
+  const cached = await cacheGet<{ product: Product & { id: string }; seller: unknown }>(c.req.url);
+  if (cached) return c.json(cached);
 
   const db = firestoreFromEnv(c.env);
   let product = await db.getDoc<Product>(`${collections.products}/${id}`);
   if (!product || product.status === "removed") {
-    return c.json({ error: "Product not found" }, 404);
+    return httpError(c, 404, "Product not found");
   }
   product = await refreshExpiredReservation(db, product);
 
   const seller = await db.getDoc<User>(`${collections.users}/${product.sellerId}`);
-  return c.json({
+  const payload = {
     product,
     seller: seller
-      ? { uid: seller.uid, name: seller.name, photoUrl: seller.photoUrl }
-      : { uid: product.sellerId, name: "Unknown", photoUrl: null },
-  });
+      ? {
+          uid: seller.uid,
+          name: seller.name,
+          photoUrl: seller.photoUrl,
+          avgRating: seller.avgRating ?? null,
+          ratingCount: seller.ratingCount ?? 0,
+          verificationStatus: seller.verificationStatus ?? "unverified",
+          phoneVerified: Boolean(seller.phoneVerifiedAt),
+        }
+      : {
+          uid: product.sellerId,
+          name: "Unknown",
+          photoUrl: null,
+          avgRating: null,
+          ratingCount: 0,
+          verificationStatus: "unverified",
+          phoneVerified: false,
+        },
+  };
+  await cachePut(c.req.url, payload, 30);
+  return c.json(payload);
 });
 
 /**
@@ -224,20 +284,20 @@ productRoutes.get("/:id", async (c) => {
 productRoutes.post("/:id/reserve", authMiddleware, async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing product id" }, 400);
+  if (!id) return httpError(c, 400, "Missing product id");
 
   const db = firestoreFromEnv(c.env);
   let product = await db.getDoc<Product>(`${collections.products}/${id}`);
   if (!product || product.status === "removed") {
-    return c.json({ error: "Product not found" }, 404);
+    return httpError(c, 404, "Product not found");
   }
   product = await refreshExpiredReservation(db, product);
 
   if (product.isBiddingEnabled) {
-    return c.json({ error: "This product is listed for bidding, not direct buy" }, 400);
+    return httpError(c, 400, "This product is listed for bidding, not direct buy");
   }
   if (product.sellerId === user.uid) {
-    return c.json({ error: "You cannot buy your own product" }, 400);
+    return httpError(c, 400, "You cannot buy your own product");
   }
   if (product.status !== "active") {
     // Idempotent: already reserved for this buyer.
@@ -252,7 +312,7 @@ productRoutes.post("/:id/reserve", authMiddleware, async (c) => {
         },
       });
     }
-    return c.json({ error: "This product is no longer available" }, 409);
+    return httpError(c, 409, "This product is no longer available");
   }
 
   const now = Date.now();
@@ -277,28 +337,31 @@ productRoutes.post("/:id/reserve", authMiddleware, async (c) => {
 productRoutes.patch("/:id", authMiddleware, async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
-  if (!id) return c.json({ error: "Missing product id" }, 400);
+  if (!id) return httpError(c, 400, "Missing product id");
 
   let body: Record<string, unknown>;
   try {
     body = await c.req.json();
   } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    return httpError(c, 400, "Invalid JSON body");
   }
 
   const db = firestoreFromEnv(c.env);
   let existing = await db.getDoc<Product>(`${collections.products}/${id}`);
   if (!existing || existing.status === "removed") {
-    return c.json({ error: "Product not found" }, 404);
+    return httpError(c, 404, "Product not found");
   }
   existing = await refreshExpiredReservation(db, existing);
   if (existing.sellerId !== user.uid) {
-    return c.json({ error: "You are not the seller of this product" }, 403);
+    return httpError(c, 403, "You are not the seller of this product");
   }
 
   const updates: Partial<Product> = {};
   try {
-    if (body.title !== undefined) updates.title = asString(body.title, "title", MAX_TITLE);
+    if (body.title !== undefined) {
+      updates.title = asString(body.title, "title", MAX_TITLE);
+      updates.titleKeywords = titleKeywords(updates.title);
+    }
     if (body.description !== undefined) {
       updates.description = asString(body.description, "description", MAX_DESCRIPTION);
     }
@@ -326,11 +389,11 @@ productRoutes.patch("/:id", authMiddleware, async (c) => {
     }
     if (body.status !== undefined) updates.status = asStatus(body.status);
     if (Object.keys(updates).length === 0) {
-      return c.json({ error: "No valid fields to update" }, 400);
+      return httpError(c, 400, "No valid fields to update");
     }
     updates.updatedAt = new Date().toISOString();
   } catch (err) {
-    if (err instanceof BadRequestError) return c.json({ error: err.message }, 400);
+    if (err instanceof BadRequestError) return httpError(c, 400, err.message);
     throw err;
   }
 

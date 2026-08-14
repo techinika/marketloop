@@ -66,6 +66,7 @@ async function main(): Promise<void> {
     title: "Sample Second-hand Laptop",
     description: "A gently used laptop for testing the marketplace.",
     category: "Electronics",
+    titleKeywords: ["sample", "second", "hand", "laptop"],
     priceAmount: 250000,
     priceCurrency: "RWF",
     isNegotiable: true,

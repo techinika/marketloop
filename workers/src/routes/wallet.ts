@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
-import { firestoreFromEnv } from "../lib/firestore";
+import { firestoreFromEnv, type QueryFilter } from "../lib/firestore";
+import { httpError } from "../lib/http";
 import { paypackFromEnv } from "../lib/paypack";
 import { authMiddleware } from "../middleware/auth";
 import { collections, type User, type WalletTransaction } from "../models";
@@ -10,20 +11,33 @@ export const walletRoutes = new Hono<AppEnv>();
 
 const PHONE_RE = /^\+?\d{9,15}$/;
 
-/** GET /wallet — the caller's balance + transaction history. */
+/** GET /wallet — the caller's balance + transaction history, newest first.
+ * Pass `limit` (max 100) and `before` (a createdAt cursor) to page backwards. */
 walletRoutes.get("/", authMiddleware, async (c) => {
   const user = c.get("user");
   const db = firestoreFromEnv(c.env);
 
+  const limitRaw = Number(c.req.query("limit") ?? "");
+  const limit =
+    Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.floor(limitRaw)) : undefined;
+  const before = c.req.query("before") ?? undefined;
+
+  const filters: QueryFilter[] = [{ field: "userId", op: "==", value: user.uid }];
+  if (before) filters.push({ field: "createdAt", op: "<", value: before });
+
   const profile = await db.getDoc<User>(`${collections.users}/${user.uid}`);
   const transactions = await db.queryCollection<WalletTransaction>(collections.walletTransactions, {
-    filters: [{ field: "userId", op: "==", value: user.uid }],
+    filters,
     orderBy: { field: "createdAt", direction: "DESCENDING" },
+    limit,
   });
 
   return c.json({
     walletBalance: profile?.walletBalance ?? 0,
     transactions,
+    ...(limit && transactions.length === limit
+      ? { nextPageToken: transactions[transactions.length - 1]!.createdAt }
+      : {}),
   });
 });
 
@@ -38,23 +52,23 @@ walletRoutes.post("/withdraw", authMiddleware, async (c) => {
   try {
     body = await c.req.json();
   } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
+    return httpError(c, 400, "Invalid JSON body");
   }
 
   const amount = typeof body.amount === "number" ? body.amount : Number(body.amount);
   if (!Number.isFinite(amount) || amount <= 0) {
-    return c.json({ error: "amount must be a positive number" }, 400);
+    return httpError(c, 400, "amount must be a positive number");
   }
   const phoneNumber = typeof body.phoneNumber === "string" ? body.phoneNumber.trim() : "";
   if (!PHONE_RE.test(phoneNumber)) {
-    return c.json({ error: "A valid phone number is required" }, 400);
+    return httpError(c, 400, "A valid phone number is required");
   }
 
   const db = firestoreFromEnv(c.env);
   const profile = await db.getDoc<User>(`${collections.users}/${user.uid}`);
   const balance = profile?.walletBalance ?? 0;
   if (amount > balance) {
-    return c.json({ error: "Insufficient wallet balance" }, 400);
+    return httpError(c, 400, "Insufficient wallet balance");
   }
 
   const now = new Date().toISOString();

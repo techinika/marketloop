@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import type { User as FirebaseUser } from "firebase/auth";
 
@@ -238,8 +239,13 @@ function CheckoutBody({
 
             <div className="mt-5 flex items-center gap-4">
               {product.images[0] ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={mediaUrl(product.images[0])} alt="" className="size-14 rounded-xl object-cover" />
+              <Image
+                src={mediaUrl(product.images[0])}
+                alt={product.title}
+                width={56}
+                height={56}
+                className="size-14 rounded-xl object-cover"
+              />
               ) : (
                 <div className="flex size-14 items-center justify-center rounded-xl bg-surface-muted text-xs text-muted">
                   No image
