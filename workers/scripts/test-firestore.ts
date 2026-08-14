@@ -43,8 +43,8 @@ const fakeFetch: typeof fetch = (async (input: Parameters<typeof fetch>[0], init
   const body = init?.body ? (JSON.parse(String(init?.body)) as { fields?: Record<string, FirestoreField>; name?: string; structuredQuery?: { from: Array<{ collectionId: string }>; where?: { fieldFilter?: unknown; compositeFilter?: { filters: Array<{ fieldFilter: { field: { fieldPath: string }; value: FirestoreField } }> } }; orderBy?: Array<{ field: { fieldPath: string }; direction: string }>; limit?: number; offset?: number } }) : null;
 
   if (method === "POST" && rest.endsWith(":runQuery")) {
-    const collectionId = rest.slice(0, -":runQuery".length);
     const q = body?.structuredQuery;
+    const collectionId = q?.from?.[0]?.collectionId ?? rest.slice(0, -":runQuery".length);
     const filters: Array<{ fieldPath: string; value: FirestoreField }> = [];
     if (q?.where) {
       if ("fieldFilter" in q.where && q.where.fieldFilter) {

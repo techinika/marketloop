@@ -329,8 +329,18 @@ export class FirestoreClient {
     collectionPath: string,
     opts: QueryOptions = {},
   ): Promise<WithId<T>[]> {
-    const structuredQuery = buildStructuredQuery(collectionPath, opts);
-    const results = (await this.requestJson(`/${collectionPath}:runQuery`, {
+    // Firestore's `:runQuery` verb must target the documents root for a
+    // top-level collection (`.../documents:runQuery`, with the collection named
+    // in `structuredQuery.from`), or a full document path for a subcollection
+    // (`.../documents/{coll}/{doc}:runQuery`). Pointing the verb at a bare
+    // top-level collection (`.../documents/products:runQuery`) makes Firestore
+    // misparse the request as a document write.
+    const segments = collectionPath.split("/");
+    const collectionId = segments[segments.length - 1] ?? collectionPath;
+    const parentPath = segments.slice(0, -1).join("/");
+    const structuredQuery = buildStructuredQuery(collectionId, opts);
+    const queryPath = parentPath ? `/${parentPath}:runQuery` : ":runQuery";
+    const results = (await this.requestJson(queryPath, {
       method: "POST",
       body: JSON.stringify({ structuredQuery }),
     })) as Array<{ document?: FirestoreDocument }> | null;

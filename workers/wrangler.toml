@@ -16,8 +16,8 @@ bucket_name = "marketloop-images"
 # paste its id here; `preview_id` is used by `wrangler dev` / `wrangler types`.
 [[kv_namespaces]]
 binding = "OTP_KV"
-id = "00000000000000000000000000000000"
-preview_id = "00000000000000000000000000000000"
+id = "d0e2ba7e799742e4aa9cf55d3d0f3aab"
+preview_id = "d0e2ba7e799742e4aa9cf55d3d0f3aab"
 
 # --- Vars (non-secret) ---
 [vars]
@@ -39,3 +39,19 @@ FRONTEND_URL = "https://marketloop.techinika.com"
 # PAYPACK_WEBHOOK_SECRET
 # PESAPAL_CONSUMER_KEY
 # PESAPAL_CONSUMER_SECRET
+
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = true
+persist = true
+head_sampling_rate = 1

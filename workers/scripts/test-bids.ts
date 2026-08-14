@@ -105,8 +105,8 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     : null;
 
   if (method === "POST" && rest.endsWith(":runQuery")) {
-    const collectionId = rest.slice(0, -":runQuery".length);
     const q = body?.structuredQuery;
+    const collectionId = q?.from?.[0]?.collectionId ?? rest.slice(0, -":runQuery".length);
     const filters: Array<{ fieldPath: string; value: FirestoreField }> = [];
     if (q?.where) {
       if ("fieldFilter" in q.where && q.where.fieldFilter) {
