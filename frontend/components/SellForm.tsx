@@ -6,11 +6,13 @@ import Link from "next/link";
 import { formatPrice } from "@/lib/api";
 import { observeAuthState, signInWithGoogle } from "@/lib/firebase";
 import { createProduct } from "@/lib/products";
+import { sanitizeDescription, stripHtml } from "@/lib/html";
 import { contentTypeForFile, prepareImageFile, presignUploads, uploadToPresignedUrl } from "@/lib/upload";
 import { CATEGORIES, type Currency, type DeliveryFeePayer, type Product } from "@/types";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/Toast";
 import { ListRowSkeleton } from "@/components/ui/Skeleton";
+import { RichTextEditor } from "@/components/ui/RichTextEditor";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -159,7 +161,7 @@ export function SellForm() {
 
     const price = Number(priceAmount);
     if (!title.trim()) return setError("Title is required.");
-    if (!description.trim()) return setError("Description is required.");
+    if (!stripHtml(description)) return setError("Description is required.");
     if (!category) return setError("Please choose a category.");
     if (!images.length) return setError("Add at least one image.");
     if (!Number.isFinite(price) || price <= 0) return setError("Enter a price greater than 0.");
@@ -179,7 +181,7 @@ export function SellForm() {
 
       const product = (await createProduct({
         title: title.trim(),
-        description: description.trim(),
+        description: sanitizeDescription(description.trim()),
         category,
         priceAmount: price,
         priceCurrency,
@@ -389,15 +391,10 @@ export function SellForm() {
               <label className="field-label" htmlFor="description">
                 Description
               </label>
-              <textarea
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                maxLength={2000}
-                rows={4}
-                placeholder="Condition, reason for selling, what's included..."
-                className="field w-full"
-              />
+              <RichTextEditor value={description} onChange={setDescription} />
+              <p className="mt-1.5 text-xs text-muted">
+                Supports rich text: bold, links, lists, headings, and quotes.
+              </p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>

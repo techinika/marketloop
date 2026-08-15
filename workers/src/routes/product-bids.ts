@@ -20,7 +20,7 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
   const id = c.req.param("id");
   if (!id) return httpError(c, 400, "Missing product id");
 
-  let body: { amount?: unknown; currency?: unknown };
+  let body: { amount?: unknown };
   try {
     body = await c.req.json();
   } catch {
@@ -50,9 +50,8 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
   ) {
     return httpError(c, 400, "amount must be a positive number");
   }
-  if (body.currency !== product.priceCurrency) {
-    return httpError(c, 400, `currency must be ${product.priceCurrency}`);
-  }
+  // Bids are always denominated in the product's price currency; the buyer
+  // never supplies a currency.
 
   const existing = await db.queryCollection<Bid>(collections.bids, {
     filters: [
@@ -67,7 +66,7 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
   if (existing[0]) {
     const updated = await db.updateDoc<Bid>(`${collections.bids}/${existing[0].id}`, {
       amount: body.amount,
-      currency: body.currency as string,
+      currency: product.priceCurrency,
       updatedAt: now,
     });
     await createNotification(
@@ -75,7 +74,7 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
       product.sellerId,
       "bid_placed",
       "Offer updated on your listing",
-      `${user.name ?? "A buyer"} raised their offer to ${body.amount} ${body.currency} on "${product.title}".`,
+      `${user.name ?? "A buyer"} raised their offer to ${body.amount} ${product.priceCurrency} on "${product.title}".`,
       { productId: product.id },
     );
     return c.json({ bid: updated }, 200);
@@ -85,7 +84,7 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
     productId: product.id,
     buyerId: user.uid,
     amount: body.amount,
-    currency: body.currency as string,
+    currency: product.priceCurrency,
     status: "active",
     createdAt: now,
     updatedAt: now,
@@ -95,7 +94,7 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
     product.sellerId,
     "bid_placed",
     "New offer on your listing",
-    `${user.name ?? "A buyer"} offered ${body.amount} ${body.currency} on "${product.title}".`,
+    `${user.name ?? "A buyer"} offered ${body.amount} ${product.priceCurrency} on "${product.title}".`,
     { productId: product.id },
   );
   return c.json({ bid: created }, 201);

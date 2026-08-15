@@ -358,18 +358,10 @@ async function main(): Promise<void> {
     );
     assert(selfBid.status === 400, `expected 400 for self-bid, got ${selfBid.status}`);
 
-    // 3. Currency must match the product.
-    const wrongCurrency = await app.request(
-      `/products/${biddingProductId}/bids`,
-      json(buyerToken, { amount: 100, currency: "USD" }),
-      env,
-    );
-    assert(wrongCurrency.status === 400, `expected 400 for currency mismatch, got ${wrongCurrency.status}`);
-
-    // 4. Place a bid.
+    // 3. The buyer never sends a currency — bids use the product's price currency.
     const placeRes = await app.request(
       `/products/${biddingProductId}/bids`,
-      json(buyerToken, { amount: 42000, currency: "RWF" }),
+      json(buyerToken, { amount: 42000 }),
       env,
     );
     assert(placeRes.status === 201, `expected 201, got ${placeRes.status}`);
@@ -377,13 +369,13 @@ async function main(): Promise<void> {
     assert(placed.bid.amount === 42000, "bid amount mismatch");
     assert(placed.bid.status === "active", "bid should be active");
     assert(placed.bid.buyerId === "buyer-1", "bid buyer mismatch");
-    assert(placed.bid.currency === "RWF", "bid currency mismatch");
+    assert(placed.bid.currency === "RWF", "bid should use the product's currency");
     const buyerBidId = placed.bid.id;
 
-    // 5. Update own bid instead of creating a new one.
+    // 4. Update own bid instead of creating a new one.
     const updateRes = await app.request(
       `/products/${biddingProductId}/bids`,
-      json(buyerToken, { amount: 43000, currency: "RWF" }),
+      json(buyerToken, { amount: 43000 }),
       env,
     );
     assert(updateRes.status === 200, `expected 200 on update, got ${updateRes.status}`);
@@ -456,6 +448,7 @@ async function main(): Promise<void> {
     assert(accepted.product.status === "reserved", "product should be reserved after accept");
     assert(accepted.product.reservedBy === "buyer-1", "product should be reserved for the winning buyer");
     assert(typeof accepted.product.reservedUntil === "string", "reservedUntil should be set");
+    assert(accepted.product.reservedAmount === 46000, "product should store the accepted bid amount");
     assert(accepted.checkout.buyerId === "buyer-1", "checkout buyer mismatch");
     assert(accepted.checkout.amount === 46000, "checkout amount should be the accepted bid");
     assert(accepted.checkout.productId === biddingProductId, "checkout product mismatch");
@@ -486,6 +479,7 @@ async function main(): Promise<void> {
     assert(reserved.product.status === "reserved", "product should be reserved");
     assert(reserved.product.reservedBy === "buyer-1", "reservedBy mismatch");
     assert(new Date(reserved.product.reservedUntil!).getTime() > Date.now(), "reservedUntil should be in the future");
+    assert(reserved.product.reservedAmount === 50000, "direct-buy reserve should store the list price");
     assert(reserved.checkout.amount === 50000, "checkout amount should be the price");
 
     const reserveTaken = await app.request(`/products/${nonBiddingProductId}/reserve`, authedPost(buyer2Token), env);
@@ -502,6 +496,7 @@ async function main(): Promise<void> {
     const expiryBody = (await detailAfterExpiry.json()) as { product: Product & { id: string } };
     assert(expiryBody.product.status === "active", `reservation should expire, got ${expiryBody.product.status}`);
     assert(expiryBody.product.reservedBy === null, "reservedBy should clear on expiry");
+    assert(expiryBody.product.reservedAmount === null, "reservedAmount should clear on expiry");
 
     // 13. GET /products/mine — seller sees all statuses.
     const mineListings = await app.request("/products/mine", bearer(sellerToken), env);

@@ -5,7 +5,7 @@ import { firestoreFromEnv, type QueryFilter } from "../lib/firestore";
 import { httpError } from "../lib/http";
 import { createNotification } from "../lib/notify";
 import { authMiddleware } from "../middleware/auth";
-import { collections, type Bid, type Product } from "../models";
+import { collections, type Bid, type Currency, type Product } from "../models";
 import type { AppEnv, Env } from "../types";
 
 export const bidRoutes = new Hono<AppEnv>();
@@ -163,6 +163,8 @@ bidRoutes.post("/:bidId/accept", authMiddleware, async (c) => {
     status: "reserved",
     reservedBy: bid.buyerId,
     reservedUntil: new Date(Date.now() + RESERVATION_HOLD_MS).toISOString(),
+    reservedAmount: bid.amount,
+    reservedCurrency: bid.currency as Currency,
     updatedAt: now,
   });
 

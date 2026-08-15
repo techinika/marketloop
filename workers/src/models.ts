@@ -96,6 +96,9 @@ export interface Product {
   reservedBy?: string | null;
   /** ISO timestamp when the reservation hold expires (check-on-read reversion). */
   reservedUntil?: string | null;
+  /** Agreed price while the item is held (accepted offer, or list price on direct buy). */
+  reservedAmount?: number | null;
+  reservedCurrency?: Currency | null;
   createdAt: string;
   updatedAt: string;
 }

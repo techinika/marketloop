@@ -27,7 +27,8 @@ import type { AppEnv } from "../types";
 export const productRoutes = new Hono<AppEnv>();
 
 const MAX_TITLE = 100;
-const MAX_DESCRIPTION = 2000;
+// Descriptions are rich text (HTML), so the cap accounts for markup overhead.
+const MAX_DESCRIPTION = 20000;
 const MAX_CONDITION_NOTE = 100;
 const MAX_MEDIA_KEY = 200;
 const MAX_PRICE = 999_999_999;
@@ -320,6 +321,8 @@ productRoutes.post("/:id/reserve", authMiddleware, async (c) => {
     status: "reserved",
     reservedBy: user.uid,
     reservedUntil: new Date(now + RESERVATION_HOLD_MS).toISOString(),
+    reservedAmount: product.priceAmount,
+    reservedCurrency: product.priceCurrency,
     updatedAt: new Date().toISOString(),
   });
 

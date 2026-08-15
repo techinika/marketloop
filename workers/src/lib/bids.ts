@@ -24,6 +24,8 @@ export async function refreshExpiredReservation(
       status: "active",
       reservedBy: null,
       reservedUntil: null,
+      reservedAmount: null,
+      reservedCurrency: null,
       updatedAt: new Date().toISOString(),
     });
   }

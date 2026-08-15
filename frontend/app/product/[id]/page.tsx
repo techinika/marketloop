@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { ProductDetail } from "@/components/ProductDetail";
 import { formatPrice, mediaUrl } from "@/lib/publicApi";
 import { fetchBidSummary, fetchProduct } from "@/lib/products";
+import { stripHtml } from "@/lib/html";
 import type { BidSummary, ProductDetail as ProductDetailData } from "@/types";
 
 type ProductInitial = {
@@ -18,7 +19,7 @@ function productSchema(data: ProductDetailData): Record<string, unknown> {
     "@context": "https://schema.org",
     "@type": "Product",
     name: product.title,
-    description: product.description,
+    description: stripHtml(product.description),
     image: product.images.map((key) => mediaUrl(key)),
     category: product.category,
     sku: product.id,
@@ -48,7 +49,7 @@ export async function generateMetadata({
   try {
     const { product } = await fetchProduct(id);
     const title = `${product.title} — ${formatPrice(product.priceAmount, product.priceCurrency)}`;
-    const description = product.description.slice(0, 160);
+    const description = stripHtml(product.description).slice(0, 160);
     return {
       title,
       description,

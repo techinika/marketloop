@@ -22,6 +22,7 @@ import { useToast } from "@/components/ui/Toast";
 import { ProductDetailSkeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { RatingBadge } from "@/components/ui/Rating";
+import { RichText } from "@/components/ui/RichText";
 
 const STATUS_BADGE: Record<ProductStatus, { label: string; cls: string }> = {
   active: { label: "Active", cls: "badge-success" },
@@ -288,7 +289,7 @@ export function ProductDetail({
               </div>
             ) : reservedByMe ? (
               <Link
-                href={`/checkout/${product.id}?amount=${encodeURIComponent(product.priceAmount)}&currency=${encodeURIComponent(product.priceCurrency)}`}
+                href={`/checkout/${product.id}?amount=${encodeURIComponent(product.reservedAmount ?? product.priceAmount)}&currency=${encodeURIComponent(product.reservedCurrency ?? product.priceCurrency)}`}
                 className="btn btn-primary w-full"
               >
                 Continue to checkout
@@ -391,9 +392,7 @@ export function ProductDetail({
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
               Description
             </h2>
-            <p className="mt-2 whitespace-pre-line text-sm leading-6 text-secondary">
-              {product.description}
-            </p>
+            <RichText html={product.description} className="mt-2 text-sm leading-6 text-secondary" />
           </section>
 
           <section className="card p-5">

@@ -172,9 +172,17 @@ function CheckoutBody({
   };
 
   const product = detail?.product;
-  const agreedAmount = order?.agreedAmount ?? queryAmount ?? product?.priceAmount ?? 0;
+  const agreedAmount =
+    order?.agreedAmount ??
+    queryAmount ??
+    product?.reservedAmount ??
+    product?.priceAmount ??
+    0;
   const deliveryFee = order?.deliveryFee ?? product?.deliveryFee ?? 0;
-  const currency = order?.currency ?? (product?.priceCurrency ?? queryCurrency) ?? "RWF";
+  const currency =
+    order?.currency ??
+    (product?.reservedCurrency ?? product?.priceCurrency ?? queryCurrency) ??
+    "RWF";
   const totalPaid = order?.totalPaid ?? agreedAmount + deliveryFee;
 
   return (

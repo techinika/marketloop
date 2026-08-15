@@ -140,6 +140,9 @@ export interface Product {
   status: ProductStatus;
   reservedBy: string | null;
   reservedUntil: string | null;
+  /** Agreed price while the item is held (accepted offer, or list price on direct buy). */
+  reservedAmount?: number;
+  reservedCurrency?: Currency;
   createdAt: string;
   updatedAt: string;
 }

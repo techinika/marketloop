@@ -10,7 +10,8 @@ import { createServer } from "node:http";
 import { Hono } from "hono";
 
 import { verifyFirebaseIdToken, type AuthUser } from "../src/lib/firebase-auth";
-import { authMiddleware } from "../src/middleware/auth";
+import { authMiddleware, ensureUserProfile } from "../src/middleware/auth";
+import type { FirestoreClient } from "../src/lib/firestore";
 
 const PROJECT_ID = "marketloop-rw";
 const JWKS_PORT = 8798;
@@ -135,7 +136,44 @@ async function main(): Promise<void> {
     const tamperedRes = await testApp.request("/me", { headers: { Authorization: `Bearer ${tampered}` } }, env);
     assert(tamperedRes.status === 401, `expected 401 for tampered token, got ${tamperedRes.status}`);
 
-    console.log("AUTH TESTS PASSED (signature, issuer, audience, expiry, middleware, /me route)");
+    // 8. Lazy profile sync: creates users/{uid} when missing, keeps existing
+    // docs untouched, and never throws when Firestore is unavailable.
+    let created: Array<{ id: string; data: Record<string, unknown> }> = [];
+    let existing: unknown = null;
+    let failReads = false;
+    const fakeDb = {
+      getDoc: async () => {
+        if (failReads) throw new Error("firestore down");
+        return existing;
+      },
+      createDoc: async (collection: string, id: string, data: Record<string, unknown>) => {
+        created.push({ id, data });
+        return { id };
+      },
+    } as unknown as FirestoreClient;
+
+    await ensureUserProfile(fakeDb, user);
+    assert(created.length === 1, "expected one createDoc for a missing profile");
+    assert(created[0]!.id === "test-uid-123", "created doc id must be the uid");
+    assert(created[0]!.data["name"] === "Test User", "created doc must carry the token name");
+    assert(created[0]!.data["email"] === "test@example.com", "created doc must carry the token email");
+    assert(created[0]!.data["walletBalance"] === 0, "created doc must start with empty wallet");
+
+    created = [];
+    existing = { uid: "test-uid-123", name: "Already There" };
+    await ensureUserProfile(fakeDb, user);
+    assert(created.length === 0, "existing profile must not be overwritten");
+
+    failReads = true;
+    let swallowed = true;
+    try {
+      await ensureUserProfile(fakeDb, user);
+    } catch {
+      swallowed = false;
+    }
+    assert(swallowed, "ensureUserProfile must swallow Firestore errors");
+
+    console.log("AUTH TESTS PASSED (signature, issuer, audience, expiry, middleware, /me route, lazy profile sync)");
   } finally {
     server.close();
   }
