@@ -1,4 +1,4 @@
-# MarketLoop — Architecture
+# ALLSHA — Architecture
 
 Companion to `README.md` (which is the operational/getting-started guide). This
 file documents how the system is put together and the engineering decisions that
@@ -56,12 +56,61 @@ SDK can't run on Workers). It signs a service-account JWT with Web Crypto and
 speaks to the Firestore REST API. Typed helpers:
 
 - `getDoc` / `createDoc` / `updateDoc` — single-document reads/writes.
+- `getDocWithTime` — like `getDoc` but also returns the document's `updateTime`
+  so a later write can be race-checked against it (CAS precondition).
 - `queryCollection` — `runQuery` with equality/range filters, one `orderBy`,
   `offset`, `limit`.
 - `getManyDocs` — `documents:batchGet` (chunked at the 10-doc API limit).
   **Use this instead of a per-item `getDoc` loop**; list endpoints
-  (`/bids/mine`, `/orders/mine`, `/orders/sales`, `/admin/orders`) batch-read
-  their referenced products/users instead of issuing N requests.
+  (`/bids/mine`, `/orders/mine`, `/orders/sales`, `/admin/orders`,
+  `/products/:id/bids/all`) batch-read their referenced products/users instead
+  of issuing N requests.
+- `updateDocIf` — CAS patch: applies an update only when the document's current
+  `updateTime` matches the caller's snapshot, otherwise the `:commit` returns a
+  409. Used for wallet double-spend protection and bid/product transitions.
+- `incrementField` — server-side numeric transform (`increment` field transform)
+  so balance changes are applied atomically by Firestore, never read-modify-write.
+- `commitWithCreate` — one `:commit` containing a CAS update + optional
+  `increment` transforms + a document create. Used for the escrow release
+  (order held→released + seller `walletBalance` increment + wallet-transaction
+  create applied in one request) and for `acceptBidAndReserve`.
+- `commitWrites` — raw `:commit` writer; returns `false` when a CAS precondition
+  fails (409), `true` on success. Exposes the full `.../documents` root URL for
+  callers that need to reference server-created document ids.
+
+### Concurrency & money movement
+
+Firestore's REST API (like Firestore itself) has no multi-document
+transactions, so every critical money move is done with **compare-and-set plus
+server-side transforms in a single `:commit`** instead of read-modify-write:
+
+- **Wallet withdraw** (`workers/src/lib/wallet.ts`): read the balance *and its
+  `updateTime`* with `getDocWithTime`, validate sufficiency, then `updateDocIf`
+  decrement via `incrementField`. A concurrent withdrawal loses the CAS and
+  re-reads — no overdraft.
+- **Escrow release** (`workers/src/lib/escrow.ts` `releaseToSeller`): switches
+  the order `held → released`, credits the seller's `walletBalance` with an
+  `increment`, and creates the `credit` transaction — one `:commit`. It returns
+  `false` (no-op) when the order is no longer `held`, so concurrent
+  double-confirms and admin force-releases credit the seller exactly once
+  (asserted by ordering test *E0*).
+- **Bid accept** (`workers/src/lib/bids.ts` `acceptBidAndReserve`): CAS `bid:
+  active → accepted` **and** `product: active → reserved` in one `:commit`; the
+  seller's accept and the buyer's withdraw race each other and exactly one
+  branch wins. Re-accepts on an already-reserved product are idempotent.
+- **Offer rows** (`workers/src/routes/product-bids.ts`): bids use a
+  **deterministic document id `{productId}__{buyerId}`**, so two concurrent
+  first-bids cannot create two rows — the loser of the create hits a 409 and
+  revives/updates the existing row.
+
+### Ordering ties
+
+Firestore orders by a single field, so rows sharing the same value (e.g. two
+chat messages written in the same millisecond) tie. `listMessages`
+(`workers/src/lib/messages.ts`) breaks ties by document id for a deterministic
+oldest-first thread. The in-memory test mocks mint zero-padded auto ids
+(`auto-00000001`) so lexicographic id order equals insertion order and the
+tie-break is reproducible in tests.
 
 ### Composite indexes
 
@@ -126,10 +175,17 @@ generation between them.
 
 Workers E2E suites (`workers/scripts/test-*.ts`) run the real Hono app via
 `app.request(...)` against in-memory mocks: a mock Firestore REST server
-(`firestoreMock`: `:runQuery`, `GET`, `PATCH`, `:batchGet`), a mock JWKS, and
-mock Paypack/Pesapal servers. **Each suite carries its own copy of
-`firestoreMock`** — when you add a Firestore endpoint used by routes, extend the
-mocks in every suite that exercises those routes.
+(`firestoreMock`: `:runQuery`, `GET`, `PATCH`, `:batchGet`, and `:commit` with
+CAS-precondition 409s, creates, and `increment` transforms), a mock JWKS, and
+mock Paypack/Pesapal servers. A shared `nextTime()` bumps the mock clock so
+concurrent-same-millisecond races are reproducible. **Each suite carries its own
+copy of `firestoreMock`** — when you add a Firestore endpoint used by routes,
+extend the mocks in every suite that exercises those routes.
+
+Key race/idempotency coverage: three concurrent `releaseToSeller` calls credit
+once (orders *E0*); concurrent first-bids collapse to one row (bids);
+concurrent bid-accepts yield exactly one success (bids); concurrent wallet
+withdrawals can't overdraft (orders section G).
 
 ```bash
 # Frontend: lint + production build

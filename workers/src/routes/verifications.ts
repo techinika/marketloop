@@ -122,7 +122,7 @@ verificationRoutes.post("/phone/request", authMiddleware, async (c) => {
 
   await sendSms({
     to: phone,
-    text: `Your Marketloop verification code is ${record.code}. It expires in 10 minutes.`,
+    text: `Your ALLSHA verification code is ${record.code}. It expires in 10 minutes.`,
   });
 
   return c.json({ message: "Verification code sent", resendInSeconds: OTP_RESEND_SECONDS });

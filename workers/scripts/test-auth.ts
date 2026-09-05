@@ -13,7 +13,7 @@ import { verifyFirebaseIdToken, type AuthUser } from "../src/lib/firebase-auth";
 import { authMiddleware, ensureUserProfile } from "../src/middleware/auth";
 import type { FirestoreClient } from "../src/lib/firestore";
 
-const PROJECT_ID = "marketloop-rw";
+const PROJECT_ID = "allsha-rw";
 const JWKS_PORT = 8798;
 const JWKS_URL = `http://127.0.0.1:${JWKS_PORT}/jwks`;
 const KID = "test-kid-1";

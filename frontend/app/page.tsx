@@ -5,9 +5,9 @@ import Link from "next/link";
 import { HeroIllustration } from "@/components/HeroIllustration";
 
 export const metadata: Metadata = {
-  title: "MarketLoop — Buy and sell used goods safely in Rwanda",
+  title: "ALLSHA — Buy and sell used goods safely in Rwanda",
   description:
-    "MarketLoop is a peer-to-peer second-hand marketplace where every payment is held in escrow until delivery is confirmed. Buy and sell used phones, electronics, furniture and more in Rwanda.",
+    "ALLSHA is a peer-to-peer second-hand marketplace where every payment is held in escrow until delivery is confirmed. Buy and sell used phones, electronics, furniture and more in Rwanda.",
   alternates: { canonical: "/" },
 };
 
@@ -112,8 +112,19 @@ const STEPS = [
 ];
 
 export default function Home() {
+  const websiteSchema = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: "ALLSHA",
+    url: "/",
+    description: metadata.description,
+  };
   return (
     <div className="flex-1">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteSchema) }}
+      />
       <section className="border-b border-border bg-surface">
         <div className="container-page grid items-center gap-10 py-16 sm:py-20 lg:grid-cols-2 lg:gap-14">
           <div>
@@ -126,7 +137,7 @@ export default function Home() {
               <span className="text-accent-strong">safely.</span>
             </h1>
             <p className="mt-5 max-w-md text-lg leading-8 text-secondary">
-              MarketLoop escrows every payment until the item is delivered — so buyers never lose
+              ALLSHA escrows every payment until the item is delivered — so buyers never lose
               their money and sellers always get paid.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -166,7 +177,7 @@ export default function Home() {
       <section id="features" className="bg-surface py-16 sm:py-20">
         <div className="container-page">
           <div className="mx-auto max-w-2xl text-center">
-            <span className="badge badge-neutral">Why MarketLoop</span>
+            <span className="badge badge-neutral">Why ALLSHA</span>
             <h2 className="mt-4 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
               Built for trust, end to end
             </h2>

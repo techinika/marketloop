@@ -63,6 +63,11 @@ export async function listMessages(
     limit: limit + 1,
   });
 
+  // Firestore (and the in-memory test mock) only orders by the single `orderBy`
+  // field; messages created in the same millisecond tie. Break the tie by
+  // document id so the thread order is deterministic.
+  newestFirst.sort((b, a) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+
   const hasMore = newestFirst.length > limit;
   const slice = newestFirst.slice(0, limit);
   const messages = slice.reverse();

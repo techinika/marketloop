@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
- * MarketLoop design tokens — single source of truth.
+ * ALLSHA design tokens — single source of truth.
  * Backgrounds stay light/off-white; the emerald accent is used sparingly for
  * primary actions, active states and links only. Three text tiers:
  *   foreground (#18181B) = headings / primary

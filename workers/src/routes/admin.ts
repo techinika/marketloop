@@ -237,10 +237,15 @@ adminRoutes.post("/orders/:id/force-release", async (c) => {
   }
 
   const now = new Date().toISOString();
-  await releaseToSeller(c.env, order);
+  // releaseToSeller atomically flips held -> released, credits the wallet and
+  // writes the transaction. It returns false when the order left "held" under
+  // us (concurrent release/refund), so never credit twice.
+  const released = await releaseToSeller(c.env, order);
+  if (!released) {
+    return httpError(c, 409, "Order is no longer held in escrow");
+  }
 
   const updated = await db.updateDoc<Order>(`${collections.orders}/${order.id}`, {
-    escrowStatus: "released",
     buyerConfirmedDelivery: true,
     sellerConfirmedDelivery: true,
     adminAction: "force-release",

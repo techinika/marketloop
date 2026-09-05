@@ -1,4 +1,4 @@
-name = "marketloop-workers"
+name = "allsha-workers"
 main = "src/index.ts"
 compatibility_date = "2026-08-13"
 
@@ -9,7 +9,7 @@ crons = ["0 * * * *"]
 # --- R2: product images / videos ---
 [[r2_buckets]]
 binding = "IMAGES"
-bucket_name = "marketloop-images"
+bucket_name = "allsha-images"
 
 # --- KV: phone-verification OTP codes ---
 # Create a namespace in the Cloudflare dashboard (Workers & Pages -> KV) and
@@ -21,10 +21,10 @@ preview_id = "d0e2ba7e799742e4aa9cf55d3d0f3aab"
 
 # --- Vars (non-secret) ---
 [vars]
-FIREBASE_PROJECT_ID = "marketloop-rw"
+FIREBASE_PROJECT_ID = "allsha-rw"
 R2_ACCOUNT_ID = ""
-R2_BUCKET_NAME = "marketloop-images"
-FRONTEND_URL = "https://marketloop.techinika.com"
+R2_BUCKET_NAME = "allsha-images"
+FRONTEND_URL = "https://allsha.techinika.com"
 
 # --- Secrets ---
 # Never commit secret values. Set them via `wrangler secret put <NAME>` for

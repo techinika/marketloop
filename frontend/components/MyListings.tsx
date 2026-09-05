@@ -60,7 +60,7 @@ export function MyListings() {
           <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
             My Listings
           </h1>
-          <p className="mt-1 text-sm text-muted">Everything you&apos;ve listed on MarketLoop.</p>
+          <p className="mt-1 text-sm text-muted">Everything you&apos;ve listed on ALLSHA.</p>
         </div>
         <Link href="/sell/new" className="btn btn-primary">
           New listing

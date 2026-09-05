@@ -1,5 +1,21 @@
 import { apiBaseUrl } from "@/lib/env";
 
+/** Default request timeout for API calls. */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+/** Builds a fetch RequestInit with an abort timeout (preserving a caller signal). */
+export function withTimeout(
+  init: RequestInit = {},
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): RequestInit {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const { signal, ...rest } = init;
+  return {
+    ...rest,
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+  };
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -36,7 +52,7 @@ export function parseErrorMessage(body: string): { message: string; parsed: unkn
  * the server bundle. `lib/api.ts` re-exports this for client components.
  */
 export async function publicFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${apiBaseUrl}${path}`, init);
+  const res = await fetch(`${apiBaseUrl}${path}`, withTimeout(init));
   if (!res.ok) {
     const text = await res.text();
     const { message, parsed } = parseErrorMessage(text);
@@ -50,10 +66,16 @@ export function mediaUrl(key: string): string {
   return `${apiBaseUrl}/media/${key}`;
 }
 
-/** Formats a price per currency, e.g. "RWF 45,000" or "$120". */
-export function formatPrice(amount: number, currency: string): string {
+/** Formats a price per currency, e.g. "RWF 45,000" or "$120". Unknown or
+ * missing currency codes are shown literally so a mislabeled amount is never
+ * silently rendered as RWF. */
+export function formatPrice(amount: number, currency?: string | null): string {
   if (currency === "USD") {
     return `$${amount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
   }
-  return `RWF ${Math.round(amount).toLocaleString("en-US")}`;
+  if (currency === "RWF") {
+    return `RWF ${Math.round(amount).toLocaleString("en-US")}`;
+  }
+  const code = currency ? currency.toUpperCase() : "?";
+  return `${code} ${amount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }

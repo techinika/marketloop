@@ -2,8 +2,8 @@
 # Copy to `.dev.vars` and fill in real values. Never commit `.dev.vars`.
 
 # --- Firestore (Google service account) ---
-FIREBASE_PROJECT_ID=marketloop-rw
-FIREBASE_CLIENT_EMAIL=your-service-account@marketloop-rw.iam.gserviceaccount.com
+FIREBASE_PROJECT_ID=allsha-rw
+FIREBASE_CLIENT_EMAIL=your-service-account@allsha-rw.iam.gserviceaccount.com
 # Keep the key on a single line with literal \n escapes:
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvA...\n-----END PRIVATE KEY-----\n"
 # Optional: override the Google JWKS endpoint (used by test-auth, local mock):
@@ -12,7 +12,7 @@ FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvA...\n-----END PRIVATE K
 # --- R2 presigned uploads (Custom S3 API credentials) ---
 # Account ID: Cloudflare dashboard -> R2 -> "Account ID" (top-right).
 # API token: R2 -> Manage R2 API Tokens -> create with Object Read & Write.
-R2_BUCKET_NAME=marketloop-images
+R2_BUCKET_NAME=allsha-images
 
 # --- Paypack (mobile money, RWF) ---
 PAYPACK_CLIENT_ID=
@@ -29,6 +29,9 @@ PESAPAL_CONSUMER_SECRET=
 # Optional: pre-registered IPN id (otherwise registered once into Firestore on first order).
 # PESAPAL_IPN_ID=
 # PESAPAL_BASE_URL=https://pay.pesapal.com/v3
+# Optional: shared secret appended to the registered IPN URL and checked on every
+# callback (Pesapal does not sign its IPN payload).
+# PESAPAL_IPN_SECRET=
 
 # --- Frontend ---
 # Public origin used for Pesapal callbacks (/checkout/callback).

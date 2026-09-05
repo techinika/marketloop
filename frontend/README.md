@@ -1,6 +1,6 @@
-# MarketLoop — frontend
+# ALLSHA — frontend
 
-The web app for the MarketLoop peer-to-peer marketplace (see the repo-root
+The web app for the ALLSHA peer-to-peer marketplace (see the repo-root
 `README.md` for the full project). Built with Next.js 16 (App Router), React 19,
 TypeScript and Tailwind CSS v4. Talks to the Cloudflare Workers API in
 `../workers`.
@@ -14,7 +14,7 @@ npm run dev
 ```
 
 Open http://localhost:3000. The Workers API is expected at `http://localhost:8787`
-(override via `NEXT_PUBLIC_API_URL`; see `lib/env.ts`).
+(override via `NEXT_PUBLIC_API_BASE_URL`; see `lib/env.ts`).
 
 ## Scripts
 
@@ -43,18 +43,26 @@ Open http://localhost:3000. The Workers API is expected at `http://localhost:878
 ## Fetch split (server vs client)
 
 `lib/publicApi.ts` exports `publicFetch`, `ApiError`, `mediaUrl`, `formatPrice`
-and is safe to import from server components. `lib/api.ts` re-exports those and
-adds `apiFetch`, which attaches the Firebase ID token
-(`Authorization: Bearer <idToken>`) and is client-only (it imports the Firebase
-client).
+and is safe to import from server components. It also exports `withTimeout`
+(`AbortSignal.timeout` + caller-signal merge) and `REQUEST_TIMEOUT_MS` (30s),
+which both `publicFetch` and `apiFetch` apply to every request so nothing hangs
+forever on a dead API. `lib/api.ts` re-exports those and adds `apiFetch`, which
+attaches the Firebase ID token (`Authorization: Bearer <idToken>`) and is
+client-only (it imports the Firebase client).
 
 ## SEO & images
 
-- `app/sitemap.ts` + `app/robots.ts` are generated from `lib/env.ts` (`siteUrl`).
-- `app/layout.tsx` sets `metadataBase`; each route exports `generateMetadata`
-  with canonical + OpenGraph tags; the product detail page emits Product
+- `app/sitemap.ts` + `app/robots.ts` are generated from `lib/env.ts` (`siteUrl`);
+  the sitemap paginates the product feed (100/page, stops on `hasMore: false`).
+- `app/layout.tsx` sets `metadataBase` and emits site-level `openGraph`
+  (+ image) and `twitter` (summary_large_image) tags; generated brand cards
+  live in `app/opengraph-image.tsx` and `app/twitter-image.tsx`. Each route
+  exports `generateMetadata` with canonical + OpenGraph tags; the product page
+  sets product-specific tags + Product JSON-LD; the homepage adds WebSite
   JSON-LD.
-- Images render through `next/image` (remote patterns for the API's `/media`
-  origin are configured in `next.config.ts`).
+- Images render through `next/image`; `next.config.ts` builds remote patterns
+  from `NEXT_PUBLIC_API_BASE_URL` (media origin, localhost dev fallback) plus
+  Google avatar hosts — no `**` wildcards.
 - Loading/error boundaries exist per route (`loading.tsx` / `error.tsx`,
-  `not-found.tsx`, `global-error.tsx`).
+  `not-found.tsx`, `global-error.tsx`). Error pages never render raw
+  `error.message`; they show generic copy plus an optional request `digest`.

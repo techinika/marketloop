@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 
 import { activeBidsForProduct, highestActiveBid, refreshExpiredReservation } from "../lib/bids";
-import { firestoreFromEnv } from "../lib/firestore";
+import { FirestoreError, firestoreFromEnv } from "../lib/firestore";
 import { httpError } from "../lib/http";
 import { createNotification } from "../lib/notify";
 import { authMiddleware } from "../middleware/auth";
@@ -80,7 +80,12 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
     return c.json({ bid: updated }, 200);
   }
 
-  const created = await db.createDoc<Bid>(collections.bids, undefined, {
+  // Bids use a deterministic document id keyed by (product, buyer) so two
+  // concurrent first-bids can never both create an "active" row — the second
+  // create hits the existing id and falls into the revive path below.
+  const bidKey = `${product.id}__${user.uid}`;
+  const bidPath = `${collections.bids}/${bidKey}`;
+  const bidDoc: Bid = {
     productId: product.id,
     buyerId: user.uid,
     amount: body.amount,
@@ -88,7 +93,22 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
     status: "active",
     createdAt: now,
     updatedAt: now,
-  });
+  };
+  let created: Bid & { id: string };
+  try {
+    created = await db.createDoc<Bid>(collections.bids, bidKey, bidDoc);
+  } catch (err) {
+    if (!(err instanceof FirestoreError) || err.status !== 409) throw err;
+    // A bid row already exists for this product+buyer (withdrawn earlier, or a
+    // concurrent first-bid won the create). Reactivate it with the new amount.
+    const revived = await db.updateDoc<Bid>(bidPath, {
+      amount: body.amount,
+      currency: product.priceCurrency,
+      status: "active",
+      updatedAt: now,
+    });
+    created = revived;
+  }
   await createNotification(
     c.env,
     product.sellerId,
@@ -166,26 +186,29 @@ productBidRoutes.get("/:id/bids/all", authMiddleware, async (c) => {
     orderBy: { field: "amount", direction: "DESCENDING" },
   });
 
-  const rows = await Promise.all(
-    bids.map(async (bid) => {
-      const buyer = await db.getDoc<User>(`${collections.users}/${bid.buyerId}`);
-      return {
-        id: bid.id,
-        amount: bid.amount,
-        currency: bid.currency,
-        createdAt: bid.createdAt,
-        buyer: buyer
-          ? {
-              uid: buyer.uid,
-              name: buyer.name,
-              photoUrl: buyer.photoUrl,
-              avgRating: buyer.avgRating ?? null,
-              ratingCount: buyer.ratingCount ?? 0,
-            }
-          : { uid: bid.buyerId, name: "Unknown", photoUrl: null, avgRating: null, ratingCount: 0 },
-      };
-    }),
+  // Batch-fetch all bidders in one round-trip instead of one getDoc per bid.
+  const buyers = await db.getManyDocs<User>(
+    bids.map((bid) => `${collections.users}/${bid.buyerId}`),
   );
+
+  const rows = bids.map((bid) => {
+    const buyer = buyers.get(bid.buyerId);
+    return {
+      id: bid.id,
+      amount: bid.amount,
+      currency: bid.currency,
+      createdAt: bid.createdAt,
+      buyer: buyer
+        ? {
+            uid: buyer.uid,
+            name: buyer.name,
+            photoUrl: buyer.photoUrl,
+            avgRating: buyer.avgRating ?? null,
+            ratingCount: buyer.ratingCount ?? 0,
+          }
+        : { uid: bid.buyerId, name: "Unknown", photoUrl: null, avgRating: null, ratingCount: 0 },
+    };
+  });
 
   return c.json({ bids: rows });
 });

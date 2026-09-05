@@ -30,6 +30,8 @@ export interface Env {
   PESAPAL_BASE_URL?: string;
   /** Optional pre-registered Pesapal IPN id; otherwise registered once into Firestore. */
   PESAPAL_IPN_ID?: string;
+  /** Optional shared secret appended to the Pesapal IPN URL and validated on receipt. */
+  PESAPAL_IPN_SECRET?: string;
   /** Public frontend origin used for Pesapal callbacks (defaults to http://localhost:3000). */
   FRONTEND_URL?: string;
   /** Override the Google JWKS endpoint (used in tests). */

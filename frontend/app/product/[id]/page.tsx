@@ -50,6 +50,7 @@ export async function generateMetadata({
     const { product } = await fetchProduct(id);
     const title = `${product.title} — ${formatPrice(product.priceAmount, product.priceCurrency)}`;
     const description = stripHtml(product.description).slice(0, 160);
+    const image = product.images[0] ? mediaUrl(product.images[0]) : "/opengraph-image";
     return {
       title,
       description,
@@ -57,9 +58,16 @@ export async function generateMetadata({
       openGraph: {
         title,
         description,
-        type: "website",
         url: `/product/${id}`,
-        images: product.images[0] ? [{ url: mediaUrl(product.images[0]) }] : undefined,
+        images: [
+          { url: image, width: image === "/opengraph-image" ? 1200 : undefined, height: image === "/opengraph-image" ? 630 : undefined, alt: product.title },
+        ],
+      },
+      twitter: {
+        card: "summary_large_image",
+        title,
+        description,
+        images: [image],
       },
       other: {
         "product:category": product.category,
@@ -69,7 +77,7 @@ export async function generateMetadata({
     };
   } catch {
     // Unknown / removed listing: keep it out of the index.
-    return { title: "Product not found — MarketLoop", robots: { index: false } };
+    return { title: "Product not found — ALLSHA", robots: { index: false } };
   }
 }
 

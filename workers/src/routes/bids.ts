@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 
-import { RESERVATION_HOLD_MS, refreshExpiredReservation } from "../lib/bids";
+import { RESERVATION_HOLD_MS, acceptBidAndReserve, refreshExpiredReservation } from "../lib/bids";
 import { firestoreFromEnv, type QueryFilter } from "../lib/firestore";
 import { httpError } from "../lib/http";
 import { createNotification } from "../lib/notify";
 import { authMiddleware } from "../middleware/auth";
-import { collections, type Bid, type Currency, type Product } from "../models";
+import { collections, type Bid, type Product } from "../models";
 import type { AppEnv, Env } from "../types";
 
 export const bidRoutes = new Hono<AppEnv>();
@@ -132,10 +132,25 @@ bidRoutes.post("/:bidId/accept", authMiddleware, async (c) => {
   }
 
   const now = new Date().toISOString();
-  const acceptedBid = await db.updateDoc<Bid>(`${collections.bids}/${bidId}`, {
-    status: "accepted",
-    updatedAt: now,
-  });
+  // Atomically accept this bid and reserve the product (CAS on both). A
+  // concurrent accept/withdraw either loses the race (we reserve) or we see
+  // the product already reserved and fall through to the idempotent branch.
+  const reservedProduct = await acceptBidAndReserve(
+    db,
+    bid,
+    fresh,
+    new Date(Date.now() + RESERVATION_HOLD_MS).toISOString(),
+    now,
+  );
+  if (!reservedProduct) {
+    // Either the bid is no longer active, or the product was reserved by a
+    // concurrent accept. Re-check against fresh state.
+    const after = await refreshExpiredReservation(db, fresh);
+    if (after.status === "reserved" && after.reservedBy === bid.buyerId) {
+      return httpError(c, 409, "This offer is being processed; please refresh");
+    }
+    return httpError(c, 409, "This bid is no longer active or the product was reserved");
+  }
 
   const others = await db.queryCollection<Bid>(collections.bids, {
     filters: [
@@ -159,22 +174,15 @@ bidRoutes.post("/:bidId/accept", authMiddleware, async (c) => {
     );
   }
 
-  const updatedProduct = await db.updateDoc<Product>(`${collections.products}/${product.id}`, {
-    status: "reserved",
-    reservedBy: bid.buyerId,
-    reservedUntil: new Date(Date.now() + RESERVATION_HOLD_MS).toISOString(),
-    reservedAmount: bid.amount,
-    reservedCurrency: bid.currency as Currency,
-    updatedAt: now,
-  });
+  const acceptedBid = (await db.getDoc<Bid>(`${collections.bids}/${bidId}`))!;
 
-  await notifyWinner(c.env, acceptedBid, updatedProduct);
+  await notifyWinner(c.env, acceptedBid, reservedProduct);
 
   return c.json({
     bid: acceptedBid,
-    product: updatedProduct,
+    product: reservedProduct,
     checkout: {
-      productId: updatedProduct.id,
+      productId: reservedProduct.id,
       buyerId: bid.buyerId,
       amount: bid.amount,
       currency: bid.currency,

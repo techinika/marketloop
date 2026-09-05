@@ -11,7 +11,7 @@ import app from "../src/index";
 import { FirestoreClient, type FirestoreDocument, type FirestoreField } from "../src/lib/firestore";
 import { collections, type Bid, type Product, type User } from "../src/models";
 
-const PROJECT_ID = "marketloop-rw";
+const PROJECT_ID = "allsha-rw";
 const JWKS_PORT = 8800;
 const JWKS_URL = `http://127.0.0.1:${JWKS_PORT}/jwks`;
 const KID = "test-kid-3";
@@ -50,6 +50,10 @@ interface StoredDoc {
 
 const store = new Map<string, StoredDoc>();
 let autoCounter = 0;
+
+function nextTime(): string {
+  return "2026-08-13T00:00:01Z";
+}
 
 function docName(path: string): string {
   return `projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
@@ -148,8 +152,61 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     return jsonResponse({ responses });
   }
 
+  if (method === "POST" && rest.endsWith(":commit")) {
+    const writes = (body as { writes?: Array<Record<string, unknown>> }).writes ?? [];
+    const applied: Array<{ updateTime: string }> = [];
+    for (const write of writes) {
+      const update = write.update as
+        | {
+            name?: string;
+            fields?: Record<string, FirestoreField>;
+            currentDocument?: { updateTime?: string };
+          }
+        | undefined;
+      if (update) {
+        const path = (update.name ?? "").split("/documents/")[1] ?? "";
+        const doc = store.get(path);
+        if (!doc) return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
+        if (update.currentDocument?.updateTime && doc.updateTime !== update.currentDocument.updateTime) {
+          return jsonResponse({ error: { code: 409, message: "conflict", status: "ABORTED" } }, 409);
+        }
+        doc.fields = { ...doc.fields, ...(update.fields ?? {}) };
+        doc.updateTime = nextTime();
+        applied.push({ updateTime: doc.updateTime });
+        continue;
+      }
+      const create = write.create as { name?: string; fields?: Record<string, FirestoreField> } | undefined;
+      if (create) {
+        const path = (create.name ?? "").split("/documents/")[1] ?? "";
+        if (store.has(path)) return jsonResponse({ error: "already exists" }, 409);
+        store.set(path, { fields: create.fields ?? {}, createTime: TIME, updateTime: TIME });
+        applied.push({ updateTime: TIME });
+        continue;
+      }
+      const transform = write.transform as
+        | { document?: string; fieldTransforms?: Array<{ fieldPath?: string; increment?: { integerValue?: string; doubleValue?: number } }> }
+        | undefined;
+      if (transform) {
+        const path = (transform.document ?? "").split("/documents/")[1] ?? "";
+        const doc = store.get(path);
+        if (!doc) return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
+        for (const ft of transform.fieldTransforms ?? []) {
+          const delta = ft.increment ? Number(ft.increment.integerValue ?? ft.increment.doubleValue ?? 0) : 0;
+          const current = (decodeValue(doc.fields[ft.fieldPath!] ?? { integerValue: "0" }) as number) || 0;
+          doc.fields[ft.fieldPath!] = Number.isInteger(current + delta)
+            ? { integerValue: String(current + delta) }
+            : { doubleValue: current + delta };
+        }
+        doc.updateTime = nextTime();
+        applied.push({ updateTime: doc.updateTime });
+        continue;
+      }
+    }
+    return jsonResponse({ commitTime: nextTime(), writeResults: applied });
+  }
+
   if (method === "POST" && !rest.includes("/")) {
-    const documentId = url.searchParams.get("documentId") ?? `auto-${++autoCounter}`;
+    const documentId = url.searchParams.get("documentId") ?? `auto-${String(++autoCounter).padStart(8, "0")}`;
     const path = `${rest}/${documentId}`;
     if (store.has(path)) return jsonResponse({ error: "already exists" }, 409);
     store.set(path, { fields: body?.fields ?? {}, createTime: TIME, updateTime: TIME });
@@ -278,7 +335,7 @@ async function main(): Promise<void> {
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-      R2_BUCKET_NAME: "marketloop-images",
+      R2_BUCKET_NAME: "allsha-images",
       FIREBASE_PROJECT_ID: PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: "test@example.com",
       FIREBASE_PRIVATE_KEY: "test-key",
@@ -516,8 +573,51 @@ async function main(): Promise<void> {
     assert(mineById.has(replacedBid.id), "buyer should see their accepted bid");
     assert(mineById.get(replacedBid.id)!.status === "accepted", "accepted bid should show as accepted");
     assert(mineById.get(replacedBid.id)!.product?.title === "Bid test item", "bid product info missing");
-    const hasWithdrawn = [...mineById.values()].some((b) => b.status === "withdrawn");
-    assert(hasWithdrawn, "withdrawn bid should appear in my-bids");
+    // Deterministic (product, buyer) bid id: a withdrawn-then-re-placed bid is
+    // revived in place, so there is exactly one row — the accepted one.
+    assert(mineById.size === 1, "exactly one bid row per product+buyer");
+
+    // 15. Concurrent first-bids collapse to one row (deterministic id).
+    const raceProduct = await createProduct(env, sellerToken, { title: "Bid race item", priceAmount: 10000 });
+    const [raceA, raceB] = await Promise.all([
+      app.request(`/products/${raceProduct}/bids`, json(buyer2Token, { amount: 1000, currency: "RWF" }), env),
+      app.request(`/products/${raceProduct}/bids`, json(buyer2Token, { amount: 1200, currency: "RWF" }), env),
+    ]);
+    assert(
+      [raceA.status, raceB.status].every((s) => s === 200 || s === 201),
+      `concurrent first-bids must both succeed, got ${raceA.status}/${raceB.status}`,
+    );
+    const bidFromA = (await raceA.json()) as { bid: Bid & { id: string } };
+    const bidFromB = (await raceB.json()) as { bid: Bid & { id: string } };
+    assert(bidFromA.bid.id === bidFromB.bid.id, "concurrent first-bids must share one row");
+    const raceSummary = (await (await app.request(`/products/${raceProduct}/bids`, {}, env)).json()) as {
+      bidCount: number;
+    };
+    assert(raceSummary.bidCount === 1, `only one active bid survives the race, got ${raceSummary.bidCount}`);
+
+    // 16. Concurrent accepts: exactly one winner reserves the product.
+    const accProduct = await createProduct(env, sellerToken, { title: "Accept race item", priceAmount: 20000 });
+    const b1 = (await app.request(`/products/${accProduct}/bids`, json(buyerToken, { amount: 8000, currency: "RWF" }), env)).json();
+    const b2 = (await app.request(`/products/${accProduct}/bids`, json(buyer2Token, { amount: 9000, currency: "RWF" }), env)).json();
+    const [accBid1, accBid2] = [await b1, await b2] as [{ bid: Bid & { id: string } }, { bid: Bid & { id: string } }];
+    const [accA, accB] = await Promise.all([
+      app.request(`/bids/${accBid1.bid.id}/accept`, authedPost(sellerToken), env),
+      app.request(`/bids/${accBid2.bid.id}/accept`, authedPost(sellerToken), env),
+    ]);
+    const accStatuses = [accA.status, accB.status].sort();
+    assert(accStatuses.join(",") === "200,409", `exactly one accept wins, got ${accStatuses.join(",")}`);
+    const winnerBody = (await (accA.status === 200 ? accA : accB).json()) as {
+      bid: Bid & { id: string };
+      product: Product & { id: string };
+    };
+    const accProductDetail = await app.request(`/products/${accProduct}`, {}, env);
+    const accDetail = (await accProductDetail.json()) as { product: Product & { id: string } };
+    assert(accDetail.product.status === "reserved", "product reserved exactly once");
+    assert(accDetail.product.reservedBy === winnerBody.bid.buyerId, "reserved for the winning buyer only");
+    const accSummary = (await (await app.request(`/products/${accProduct}/bids`, {}, env)).json()) as {
+      bidCount: number;
+    };
+    assert(accSummary.bidCount === 0, "losing bids withdrawn, no active bids remain");
 
     console.log(
       "BID TESTS PASSED (place/update/withdraw, public summary anonymity, seller view + accept -> reserve, direct buy reserve, expiry reversion, my-listings, my-bids)",

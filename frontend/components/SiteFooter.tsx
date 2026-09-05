@@ -23,7 +23,7 @@ const LINK_GROUPS: Array<{ title: string; links: Array<{ label: string; href: st
     links: [
       { label: "How it works", href: "/#how-it-works" },
       { label: "Features", href: "/#features" },
-      { label: "Support", href: "mailto:support@marketloop.rw" },
+      { label: "Support", href: "mailto:support@allsha.rw" },
     ],
   },
 ];
@@ -33,7 +33,7 @@ export function SiteFooter() {
     <footer className="mt-auto border-t border-border bg-surface">
       <div className="container-page grid gap-10 py-12 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr]">
         <div>
-          <span className="text-lg font-semibold tracking-tight text-foreground">MarketLoop</span>
+          <span className="text-lg font-semibold tracking-tight text-foreground">ALLSHA</span>
           <p className="mt-3 max-w-xs text-sm leading-6 text-secondary">
             A peer-to-peer marketplace where every payment is held in escrow until delivery is
             confirmed — so buying and selling used goods is safe for both sides.
@@ -61,7 +61,7 @@ export function SiteFooter() {
 
       <div className="border-t border-border">
         <div className="container-page flex flex-col gap-2 py-6 text-xs text-muted sm:flex-row sm:items-center sm:justify-between">
-          <p>&copy; {new Date().getFullYear()} MarketLoop. All rights reserved.</p>
+          <p>&copy; {new Date().getFullYear()} ALLSHA. All rights reserved.</p>
           <p>
             Payments secured by escrow · MTN MoMo, Airtel Money &amp; cards supported
           </p>

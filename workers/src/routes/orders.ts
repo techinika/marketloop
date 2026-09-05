@@ -84,7 +84,8 @@ async function ensurePesapalIpnId(c: Context<AppEnv>): Promise<string> {
   if (cached?.notificationId) return cached.notificationId;
 
   const pesapal = pesapalFromEnv(c.env);
-  const ipnUrl = `${c.env.FRONTEND_URL ?? "http://localhost:3000"}/webhooks/pesapal-ipn`;
+  const secretQuery = c.env.PESAPAL_IPN_SECRET ? `?secret=${encodeURIComponent(c.env.PESAPAL_IPN_SECRET)}` : "";
+  const ipnUrl = `${c.env.FRONTEND_URL ?? "http://localhost:3000"}/webhooks/pesapal-ipn${secretQuery}`;
   const notificationId = await pesapal.registerIPN(ipnUrl);
   await db.createDoc<{ notificationId: string; url: string; createdAt: string }>(
     collections.platform,
@@ -229,6 +230,7 @@ orderRoutes.post("/", authMiddleware, async (c) => {
     const { orderTrackingId, redirectUrl } = await pesapalFromEnv(c.env).submitOrder({
       id: order.id,
       amount: totalPaid,
+      currency,
       description: product.title,
       callbackUrl: `${c.env.FRONTEND_URL ?? "http://localhost:3000"}/checkout/callback?orderId=${order.id}`,
       notificationId,
@@ -614,10 +616,7 @@ orderRoutes.post("/:id/confirm-delivery", authMiddleware, async (c) => {
 
   if (bothConfirmed) {
     await releaseToSeller(c.env, updated);
-    updated = await db.updateDoc<Order>(`${collections.orders}/${id}`, {
-      escrowStatus: "released",
-      updatedAt: now,
-    });
+    updated = (await db.getDoc<Order>(`${collections.orders}/${id}`)) ?? updated;
   }
 
   // Rating is about the counterpart: buyer rates the seller, seller rates the buyer.

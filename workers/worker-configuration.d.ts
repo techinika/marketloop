@@ -4,10 +4,10 @@
 interface __BaseEnv_Env {
 	OTP_KV: KVNamespace;
 	IMAGES: R2Bucket;
-	FIREBASE_PROJECT_ID: "marketloop-rw";
+	FIREBASE_PROJECT_ID: "allsha-rw";
 	R2_ACCOUNT_ID: "";
-	R2_BUCKET_NAME: "marketloop-images";
-	FRONTEND_URL: "https://marketloop.techinika.com";
+	R2_BUCKET_NAME: "allsha-images";
+	FRONTEND_URL: "https://allsha.techinika.com";
 }
 declare namespace Cloudflare {
 	interface GlobalProps {

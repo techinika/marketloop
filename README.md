@@ -1,4 +1,4 @@
-# MarketLoop
+# ALLSHA
 
 A peer-to-peer second-hand marketplace app. Buy and sell used goods directly between users.
 
@@ -60,9 +60,10 @@ or via `wrangler secret put <NAME>` for deployed environments:
 - `PESAPAL_CONSUMER_KEY` — Pesapal (cards / mobile money) API
 - `PESAPAL_CONSUMER_SECRET`
 - `PESAPAL_BASE_URL` / `PESAPAL_IPN_ID` — optional overrides; the IPN is otherwise registered once and cached in Firestore
+- `PESAPAL_IPN_SECRET` — optional shared secret appended to the registered IPN URL; IPN callbacks lacking it are rejected (Pesapal does not sign its IPN payload)
 - `FRONTEND_URL` (non-secret, lives in `[vars]`) — origin used for Pesapal callback + IPN URLs (default `http://localhost:3000`)
 
-R2 bucket binding: `IMAGES` (bucket `marketloop-images`) for product images/videos.
+R2 bucket binding: `IMAGES` (bucket `allsha-images`) for product images/videos.
 
 KV namespace binding: `OTP_KV` for phone-verification codes (create it in the
 Cloudflare dashboard and paste its id into `wrangler.toml`).
@@ -115,7 +116,7 @@ Talking / Termii / Vonage) by editing `sendSms` — no caller changes.
 | `GET /verifications/me`       | user | The caller's verification state (phone, `verificationStatus`, document type, review note) |
 | `POST /verifications/me/id/sign-url` | user | Signed GET URL for the caller's own ID document |
 | `POST /webhooks/paypack`    | public (HMAC) | Paypack status webhook. Signature-verified (`X-Paypack-Signature`). Successful CASHIN → order `held` + product `sold`; failed → order `failed` + product `active` |
-| `GET/POST /webhooks/pesapal-ipn` | public | Pesapal IPN. Polls the transaction by `orderTrackingId`; `status_code` 1 = held+sold, 2/3 = failed+active. Responds with Pesapal's expected IPN JSON |
+| `GET/POST /webhooks/pesapal-ipn` | public | Pesapal IPN. Rejects callbacks lacking the optional `PESAPAL_IPN_SECRET` (`?secret=` on the registered URL), polls the transaction by `orderTrackingId`; `status_code` 1 = held+sold, 2/3 = failed+active. Responds with Pesapal's expected IPN JSON |
 | `GET /notifications`       | user   | The caller's in-app notifications, newest first (`page`/`pageSize`) |
 | `POST /notifications/{id}/read` | user   | Marks one of the caller's notifications as read (403 if it isn't theirs) |
 | `POST /notifications/read-all` | user   | Marks all of the caller's notifications as read |
@@ -196,7 +197,7 @@ Collections (see `workers/src/models.ts` and `frontend/types/index.ts`):
 | --------------------- | ----------- | ---------- |
 | `users`               | `{uid}`     | uid, name, email, photoUrl, phone, phoneVerifiedAt?, walletBalance, isAdmin?, rating, avgRating?, ratingCount?, verificationStatus (unverified/pending/verified/rejected), idDocumentType?, idDocumentKey?, verificationSubmittedAt?, verificationReviewedAt?, verificationNote?, createdAt, updatedAt? |
 | `products`            | `{productId}` | sellerId, title, description, category, priceAmount, priceCurrency (USD/RWF), isNegotiable, isBiddingEnabled, conditionNote, images[], videoUrl, deliveryFee, deliveryFeePayer, status, reservedBy, reservedUntil, createdAt, updatedAt |
-| `bids`                | `{bidId}`   | productId, buyerId, amount, currency, status (active/withdrawn/accepted), createdAt, updatedAt |
+| `bids`                | `{productId}__{buyerId}` | productId, buyerId, amount, currency, status (active/withdrawn/accepted), createdAt, updatedAt — the deterministic id means a given product+buyer can never have two rows, so concurrent first-bids collapse into one |
 | `orders`              | `{orderId}` | productId, sellerId, buyerId, agreedAmount, currency, deliveryFee, deliveryFeePayer, totalPaid (= agreedAmount + deliveryFee, always charged to the buyer), paymentProvider (paypack/pesapal), paymentReference, buyerPhoneNumber, escrowStatus (pending_payment/held/released/refunded/refund_requested/failed), buyerConfirmedDelivery, sellerConfirmedDelivery, deliveryDeadline, buyerFeedback?, sellerFeedback? (rating 1-5 + comment), hasDispute?, disputeReason?, createdAt, updatedAt, adminAction/adminNote/adminUid/adminActionAt? (set by manual admin actions) |
 | `messages`            | `{messageId}` | orderId, senderId, senderRole (buyer/seller), text, isRead, createdAt — per-order chat thread |
 | `walletTransactions`  | `{txId}`    | userId, orderId, type (credit/debit/refund), amount, currency, createdAt |
@@ -207,6 +208,14 @@ Collections (see `workers/src/models.ts` and `frontend/types/index.ts`):
 `totalPaid = agreedAmount + deliveryFee`. At release, the seller's settlement depends on
 `deliveryFeePayer`: `buyer` → seller receives the full `agreedAmount`; `seller` → the
 seller absorbs the courier and receives `agreedAmount - deliveryFee`.
+
+Release is **atomic**: one Firestore `:commit` CAS-flips the order `held → released`,
+`increment`s the seller's `walletBalance`, and creates the `credit` wallet transaction.
+`releaseToSeller` returns `false` when the order is already released, so concurrent
+double-confirms / admin force-releases credit the seller exactly once. The same
+CAS-in-one-commit pattern backs wallet withdrawals (no overdraft) and bid accepts
+(both the bid and the product transition only if unmodified). Bids live under
+`{productId}__{buyerId}` ids so a buyer can never hold two offers on one listing.
 
 The Workers API talks to Firestore via its REST API (`workers/src/lib/firestore.ts`),
 authenticating with a manually-signed service-account JWT. Typed helpers:
@@ -237,8 +246,10 @@ npm test
   through the real verifier + middleware + `/me` route against a local mock JWKS
   (covers valid, expired, wrong-audience, wrong-issuer, tampered, missing-token).
 - `npm run test:firestore` — exercises `createDoc` / `getDoc` / `updateDoc` /
-  `queryCollection` (incl. `offset` pagination) against an in-memory mock of the
-  Firestore REST API.
+  `queryCollection` (incl. `offset` pagination), `getManyDocs`, `getDocWithTime`
+  / `updateDocIf` CAS (success + conflict), `incrementField`, and
+  `commitWithCreate` (success + stale-snapshot leaves nothing written) against
+  an in-memory mock of the Firestore REST API.
 - `npm run test:presign` — SigV4 presigner against AWS's published test vector,
   plus R2 presigned URL shape, determinism and expiry clamping.
 - `npm run test:products` — full Hono app against mock JWKS + mock Firestore:
@@ -247,8 +258,9 @@ npm test
 - `npm run test:bids` — full Hono app against mock JWKS + mock Firestore:
   place/update/withdraw offers (incl. self-bid, currency and non-bidding
   rejections), anonymous public summary, seller's sorted bid view + accept →
-  product reserved + others withdrawn, direct-buy reserve (incl. idempotency
-  and 15-min expiry reversion), `/products/mine`, `/bids/mine`.
+  product reserved + others withdrawn (concurrent accepts: exactly one wins,
+  other gets 409; concurrent first-bids: exactly one row), direct-buy reserve
+  (incl. idempotency and 15-min expiry reversion), `/products/mine`, `/bids/mine`.
 - `npm run test:paypack` — Paypack client against a local mock API: authorize +
   token cache/refresh, cashin/cashout with `Idempotency-Key`, find, and
   HMAC-SHA256 webhook signature verification.
@@ -259,7 +271,8 @@ npm test
   mock Paypack/Pesapal servers: order creation (RWF cashin idempotency, USD
   redirect + IPN registration caching), signature/access guards, webhook +
   IPN state transitions, delivery-confirm release for both `deliveryFeePayer`
-  variants, scheduled auto-refund (Paypack `refunded` vs Pesapal
+  variants (escrow release is atomic — three concurrent releases credit the
+  seller exactly once), scheduled auto-refund (Paypack `refunded` vs Pesapal
   `refund_requested`), provider-down 502 + retry reuse, and wallet
   withdrawals incl. balance-restore on cashout failure.
 - `npm run test:admin` — full Hono app against mock JWKS + mock Firestore +
@@ -303,8 +316,9 @@ npm test
 - [x] Admin panel: isAdmin-gated overview/stats, order oversight (needs-attention pinned), mark-refunded + force-release (audited), user search
 - [x] Phone + identity verification: OTP by SMS (KV-backed) + ID-document upload → admin review → verified badge (informational, never gates selling)
 - [x] Per-order buyer/seller chat (`messages` collection)
-- [x] SEO: sitemap + robots, per-route metadata/canonical/OpenGraph, product JSON-LD, `not-found`/`error`/`global-error`/loading boundaries, semantic headings, `next/image`
-- [x] Performance: `getManyDocs` batch reads (kills N+1 in list endpoints), 30s TTL caching on feed + detail, opt-in `limit`/`before` pagination, client-side image downscaling to WebP before upload
+- [x] Security & correctness hardening: Pesapal IPN authenticity (registered-URL secret + amount re-check on COMPLETED) and mobile-money webhooks HMAC-verified, currency typed through the whole stack (USD/RWF), wallet withdraws/escrow releases/bid accepts race-safe via Firestore CAS + `increment` in a single `:commit`, deterministic bid ids
+- [x] SEO: sitemap + robots, per-route metadata/canonical/OpenGraph/Twitter cards, generated OG + Twitter images (`opengraph-image` / `twitter-image`), product JSON-LD + `product:` tags, paginated sitemap, `not-found`/`error`/`global-error`/loading boundaries, semantic headings, `next/image`
+- [x] Performance & robustness: `getManyDocs` batch reads (kills N+1 in list endpoints), 30s TTL caching on feed + detail, opt-in `limit`/`before` pagination, client-side image downscaling to WebP before upload, 30s request timeouts on API fetches, `next/image` remote origins scoped to the API host + Google avatars
 - [x] Config validation: `/health` reports missing secrets/bindings as `degraded`; hand-rolled validators + flat `{ error }` contract
 - [x] `ARCHITECTURE.md` documenting decisions + the required Firestore composite indexes
 - [x] Backend + frontend tests/lint/build green (workers 10 suites, frontend lint + build)

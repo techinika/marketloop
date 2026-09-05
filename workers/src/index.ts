@@ -46,7 +46,7 @@ app.route("/notifications", notificationRoutes);
 app.route("/admin", adminRoutes);
 
 app.get("/", (c) =>
-  c.json({ name: "marketloop-workers", message: "API is running" }),
+  c.json({ name: "allsha-workers", message: "API is running" }),
 );
 
 export default app;

@@ -12,7 +12,7 @@ import app from "../src/index";
 import { FirestoreClient, type FirestoreDocument, type FirestoreField } from "../src/lib/firestore";
 import { collections, type Product, type User } from "../src/models";
 
-const PROJECT_ID = "marketloop-rw";
+const PROJECT_ID = "allsha-rw";
 const JWKS_PORT = 8799;
 const JWKS_URL = `http://127.0.0.1:${JWKS_PORT}/jwks`;
 const KID = "test-kid-2";
@@ -168,7 +168,7 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
   }
 
   if (method === "POST" && !rest.includes("/")) {
-    const documentId = url.searchParams.get("documentId") ?? `auto-${++autoCounter}`;
+    const documentId = url.searchParams.get("documentId") ?? `auto-${String(++autoCounter).padStart(8, "0")}`;
     const path = `${rest}/${documentId}`;
     if (store.has(path)) return jsonResponse({ error: "already exists" }, 409);
     store.set(path, { fields: body?.fields ?? {}, createTime: TIME, updateTime: TIME });
@@ -332,7 +332,7 @@ async function main(): Promise<void> {
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-      R2_BUCKET_NAME: "marketloop-images",
+      R2_BUCKET_NAME: "allsha-images",
       FIREBASE_PROJECT_ID: PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: "test@example.com",
       FIREBASE_PRIVATE_KEY: "test-key",

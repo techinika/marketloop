@@ -65,35 +65,60 @@ walletRoutes.post("/withdraw", authMiddleware, async (c) => {
   }
 
   const db = firestoreFromEnv(c.env);
-  const profile = await db.getDoc<User>(`${collections.users}/${user.uid}`);
-  const balance = profile?.walletBalance ?? 0;
-  if (amount > balance) {
-    return httpError(c, 400, "Insufficient wallet balance");
-  }
 
   const now = new Date().toISOString();
-  // Debit first so a concurrent withdrawal can't double-spend the balance.
-  const transaction = await db.createDoc<WalletTransaction>(collections.walletTransactions, undefined, {
-    userId: user.uid,
-    orderId: null,
-    type: "debit",
-    amount,
-    currency: "RWF",
-    createdAt: now,
-  });
-  await db.updateDoc<User>(`${collections.users}/${user.uid}`, {
-    walletBalance: balance - amount,
-    updatedAt: now,
-  });
+
+  // Optimistic-concurrency loop: read the balance, validate, then CAS-debit.
+  // If a concurrent withdrawal changed the doc first, re-read and re-evaluate
+  // so two requests can never both pass the `amount > balance` check on the
+  // same snapshot (double spend).
+  let transaction: (WalletTransaction & { id: string }) | null = null;
+  let casSucceeded = false;
+  let debitedBalance = 0;
+  for (let attempt = 0; attempt < 5 && !casSucceeded; attempt++) {
+    const snapshot = await db.getDocWithTime<User>(`${collections.users}/${user.uid}`);
+    if (!snapshot) return httpError(c, 404, "User profile not found");
+    const { doc: profile, updateTime } = snapshot;
+    const balance = profile.walletBalance ?? 0;
+    if (amount > balance) {
+      return httpError(c, 400, "Insufficient wallet balance");
+    }
+
+    // Single atomic commit: CAS-debit the balance AND create the debit record.
+    // Both apply together or not at all, so a failed cashout restore can't
+    // leave an orphan transaction either.
+    const txId = crypto.randomUUID();
+    const debit = {
+      userId: user.uid,
+      orderId: null,
+      type: "debit" as const,
+      amount,
+      currency: "RWF" as const,
+      createdAt: now,
+    };
+    const committed = await db.commitWithCreate<WalletTransaction>(
+      `${collections.users}/${user.uid}`,
+      { walletBalance: balance - amount, updatedAt: now },
+      updateTime,
+      collections.walletTransactions,
+      debit,
+      txId,
+    );
+    if (!committed) continue; // conflict — re-read and retry
+    transaction = committed;
+    debitedBalance = balance - amount;
+    casSucceeded = true;
+  }
+  if (!casSucceeded || !transaction) {
+    return httpError(c, 409, "Withdrawal conflicted with another transaction; please retry");
+  }
 
   try {
     await paypackFromEnv(c.env).cashout(amount, phoneNumber, `withdraw-${user.uid}-${transaction.id}`);
   } catch (err) {
-    // Cashout failed: restore the balance and reclassify the transaction.
-    await db.updateDoc<User>(`${collections.users}/${user.uid}`, {
-      walletBalance: balance,
-      updatedAt: now,
-    });
+    // Cashout failed: atomically re-credit (an increment, so a concurrent
+    // escrow release isn't clobbered) and reclassify the transaction.
+    await db.incrementField(`${collections.users}/${user.uid}`, "walletBalance", amount);
     await db.updateDoc<WalletTransaction>(`${collections.walletTransactions}/${transaction.id}`, {
       type: "refund",
     });
@@ -104,6 +129,6 @@ walletRoutes.post("/withdraw", authMiddleware, async (c) => {
 
   return c.json({
     transaction,
-    walletBalance: balance - amount,
+    walletBalance: debitedBalance,
   });
 });

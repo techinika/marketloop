@@ -6,7 +6,7 @@
 import { FirestoreClient, decodeValue, type FirestoreDocument, type FirestoreField } from "../src/lib/firestore";
 import { collections, type Product, type User } from "../src/models";
 
-const PROJECT_ID = "marketloop-rw";
+const PROJECT_ID = "allsha-rw";
 const API_URL = "http://firestore.local/v1";
 
 interface StoredDoc {
@@ -17,7 +17,13 @@ interface StoredDoc {
 
 const store = new Map<string, StoredDoc>();
 
-const TIME = "2026-08-13T00:00:00Z";
+const TIME = "2026-08-13T00:00:00.000Z";
+let writeClock = 0;
+
+function bumpTime(): string {
+  writeClock += 1;
+  return new Date(Date.parse(TIME) + writeClock * 1000).toISOString();
+}
 
 function docName(path: string): string {
   return `projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
@@ -87,6 +93,70 @@ const fakeFetch: typeof fetch = (async (input: Parameters<typeof fetch>[0], init
     return jsonResponse(docJson(path, store.get(path)!));
   }
 
+  if (method === "POST" && rest.endsWith(":batchGet")) {
+    const documents = (JSON.parse(String(init?.body)) as { documents?: string[] }).documents ?? [];
+    const responses = documents.map((name) => {
+      const path = name.split("/documents/")[1] ?? name;
+      const doc = store.get(path);
+      return doc ? { found: docJson(path, doc), readTime: TIME } : { missing: name, readTime: TIME };
+    });
+    return jsonResponse({ responses });
+  }
+
+  if (method === "POST" && rest.endsWith(":commit")) {
+    const writes = (JSON.parse(String(init?.body)).writes as Array<Record<string, unknown>> | undefined) ?? [];
+    const applied: Array<{ updateTime: string }> = [];
+    for (const write of writes) {
+      const update = write.update as
+        | {
+            name?: string;
+            fields?: Record<string, FirestoreField>;
+            currentDocument?: { updateTime?: string };
+          }
+        | undefined;
+      if (update) {
+        const path = (update.name ?? "").split("/documents/")[1] ?? "";
+        const doc = store.get(path);
+        if (!doc) return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
+        // CAS precondition: bail with 409 when the snapshot is stale.
+        if (update.currentDocument?.updateTime && doc.updateTime !== update.currentDocument.updateTime) {
+          return jsonResponse({ error: { code: 409, message: "conflict", status: "ABORTED" } }, 409);
+        }
+        doc.fields = { ...doc.fields, ...(update.fields ?? {}) };
+        doc.updateTime = bumpTime();
+        applied.push({ updateTime: doc.updateTime });
+        continue;
+      }
+      const create = write.create as { name?: string; fields?: Record<string, FirestoreField> } | undefined;
+      if (create) {
+        const path = (create.name ?? "").split("/documents/")[1] ?? "";
+        if (store.has(path)) return jsonResponse({ error: "already exists" }, 409);
+        store.set(path, { fields: create.fields ?? {}, createTime: TIME, updateTime: bumpTime() });
+        applied.push({ updateTime: store.get(path)!.updateTime });
+        continue;
+      }
+      const transform = write.transform as
+        | { document?: string; fieldTransforms?: Array<{ fieldPath?: string; increment?: { integerValue?: string; doubleValue?: number } }> }
+        | undefined;
+      if (transform) {
+        const path = (transform.document ?? "").split("/documents/")[1] ?? "";
+        const doc = store.get(path);
+        if (!doc) return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
+        for (const ft of transform.fieldTransforms ?? []) {
+          const delta = ft.increment ? Number(ft.increment.integerValue ?? ft.increment.doubleValue ?? 0) : 0;
+          const current = (decodeValue(doc.fields[ft.fieldPath!] ?? { integerValue: "0" }) as number) || 0;
+          doc.fields[ft.fieldPath!] = Number.isInteger(current + delta)
+            ? { integerValue: String(current + delta) }
+            : { doubleValue: current + delta };
+        }
+        doc.updateTime = bumpTime();
+        applied.push({ updateTime: doc.updateTime });
+        continue;
+      }
+    }
+    return jsonResponse({ commitTime: bumpTime(), writeResults: applied });
+  }
+
   if (method === "GET") {
     const doc = store.get(rest);
     if (!doc) {
@@ -101,7 +171,7 @@ const fakeFetch: typeof fetch = (async (input: Parameters<typeof fetch>[0], init
       return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
     }
     doc.fields = { ...doc.fields, ...(body?.fields ?? {}) };
-    doc.updateTime = TIME;
+    doc.updateTime = bumpTime();
     return jsonResponse(docJson(rest, doc));
   }
 
@@ -234,8 +304,81 @@ async function main(): Promise<void> {
   assert(page2.length === 1, "page 2 should have 1 result");
   assert(page2[0]?.id === "seed-product-001", "second newest product should be on page 2");
 
+  // ---- getDocWithTime + CAS updateDocIf ------------------------------------
+
+  const snap = await db.getDocWithTime<User>(`${collections.users}/seed-user-001`);
+  assert(snap !== null, "getDocWithTime should return the doc");
+  assert(snap!.doc.walletBalance === 5000, "getDocWithTime wallet read mismatch");
+
+  // Successful CAS update (uses the snapshot's updateTime).
+  const casOk = await db.updateDocIf<User>(`${collections.users}/seed-user-001`, { walletBalance: 7000 }, snap!.updateTime);
+  assert(casOk !== null, "updateDocIf should succeed on a fresh snapshot");
+  assert(casOk!.walletBalance === 7000, "updateDocIf update mismatch");
+
+  // Stale snapshot -> conflict -> null (parallel writer won the race).
+  let racer = await db.getDocWithTime<User>(`${collections.users}/seed-user-001`);
+  const concurrentWin = await db.updateDoc<User>(`${collections.users}/seed-user-001`, { walletBalance: 9000 });
+  assert(concurrentWin.walletBalance === 9000, "concurrent writer update mismatch");
+  const casStale = await db.updateDocIf<User>(`${collections.users}/seed-user-001`, { walletBalance: 8000 }, racer!.updateTime);
+  assert(casStale === null, "updateDocIf must fail (null) on a stale snapshot");
+  const afterRace = await db.getDoc<User>(`${collections.users}/seed-user-001`);
+  assert(afterRace?.walletBalance === 9000, "stale CAS must not clobber the winner");
+
+  // ---- getManyDocs (batchGet) ----------------------------------------------
+
+  const many = await db.getManyDocs<User>([
+    `${collections.users}/seed-user-001`,
+    `${collections.users}/nope`,
+  ]);
+  assert(many.size === 1, `getManyDocs should return only found docs, got ${many.size}`);
+  assert(many.get("seed-user-001")?.walletBalance === 9000, "getManyDocs result content mismatch");
+
+  // ---- incrementField + commitWithCreate -----------------------------------
+
+  // incrementField is a server-side transform: it applies relative to the
+  // current value and works even after a concurrent write.
+  const txPath = `${collections.users}/seed-user-001/transactions`;
+  await db.incrementField(`${collections.users}/seed-user-001`, "walletBalance", -1000);
+  const afterInc = await db.getDoc<User>(`${collections.users}/seed-user-001`);
+  assert(afterInc?.walletBalance === 8000, "incrementField should subtract 1000 -> 8000");
+  await db.incrementField(`${collections.users}/seed-user-001`, "walletBalance", 500);
+  const afterInc2 = await db.getDoc<User>(`${collections.users}/seed-user-001`);
+  assert(afterInc2?.walletBalance === 8500, "incrementField should add 500 -> 8500");
+
+  // commitWithCreate: CAS update + create in one commit.
+  const beforeCommit = await db.getDocWithTime<User>(`${collections.users}/seed-user-001`);
+  const committed = await db.commitWithCreate<{ type: string; amount: number; createdAt: string }>(
+    `${collections.users}/seed-user-001`,
+    { walletBalance: 100 },
+    beforeCommit!.updateTime,
+    txPath,
+    { type: "debit", amount: 8400, createdAt: now },
+    crypto.randomUUID(),
+  );
+  assert(committed !== null, "commitWithCreate should succeed on a fresh snapshot");
+  assert(committed!.type === "debit", "commitWithCreate returned created doc mismatch");
+  const afterDebit = await db.getDoc<User>(`${collections.users}/seed-user-001`);
+  assert(afterDebit?.walletBalance === 100, "commitWithCreate CAS update applied");
+
+  // commitWithCreate with a stale snapshot -> null, nothing written.
+  const staleSnap = await db.getDocWithTime<User>(`${collections.users}/seed-user-001`);
+  await db.updateDoc<User>(`${collections.users}/seed-user-001`, { walletBalance: 200 }); // concurrent writer wins
+  const conflicted = await db.commitWithCreate<{ type: string; amount: number; createdAt: string }>(
+    `${collections.users}/seed-user-001`,
+    { walletBalance: 50 },
+    staleSnap!.updateTime,
+    txPath,
+    { type: "debit", amount: 50, createdAt: now },
+    "tx-conflict",
+  );
+  assert(conflicted === null, "commitWithCreate must fail (null) on a stale snapshot");
+  const txGone = await db.getDoc(`${txPath}/tx-conflict`);
+  assert(txGone === null, "conflicted commit must not write the create");
+  const afterBlow = await db.getDoc<User>(`${collections.users}/seed-user-001`);
+  assert(afterBlow?.walletBalance === 200, "conflicted commit must not clobber the winner");
+
   console.log(
-    "FIRESTORE TESTS PASSED (createDoc, getDoc, updateDoc, queryCollection, offset pagination, encode/decode round-trip)",
+    "FIRESTORE TESTS PASSED (createDoc, getDoc, updateDoc, queryCollection, offset pagination, getManyDocs, getDocWithTime, updateDocIf CAS, incrementField, commitWithCreate)",
   );
 }
 

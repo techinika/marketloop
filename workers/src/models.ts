@@ -108,7 +108,7 @@ export interface Bid {
   productId: string;
   buyerId: string;
   amount: number;
-  currency: string;
+  currency: Currency;
   status: BidStatus;
   createdAt: string;
   updatedAt: string;
@@ -138,7 +138,7 @@ export interface Order {
   sellerId: string;
   buyerId: string;
   agreedAmount: number;
-  currency: string;
+  currency: Currency;
   deliveryFee: number;
   /** Who covers the courier cost; used to compute the seller's settlement at release. */
   deliveryFeePayer: DeliveryFeePayer;
@@ -176,7 +176,7 @@ export interface WalletTransaction {
   orderId: string | null;
   type: WalletTransactionType;
   amount: number;
-  currency: string;
+  currency: Currency;
   createdAt: string;
 }
 

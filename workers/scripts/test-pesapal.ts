@@ -116,7 +116,8 @@ async function main(): Promise<void> {
     const order = await client.submitOrder({
       id: "order-1",
       amount: 150,
-      description: "MarketLoop order-1",
+      currency: "USD",
+      description: "ALLSHA order-1",
       callbackUrl: "https://example.com/checkout/callback?orderId=order-1",
       notificationId: ipnId,
       billingAddress: { emailAddress: "buyer@example.com", firstName: "Alice", lastName: "M" },
@@ -134,7 +135,7 @@ async function main(): Promise<void> {
     const refund = await client.refundRequest({
       confirmationCode: "conf-1",
       amount: 150,
-      username: "marketloop",
+      username: "allsha",
       remarks: "expired escrow",
     });
     assert((refund as { refund_id: string }).refund_id === "refund-1", "refundRequest returns refund_id");

@@ -14,7 +14,7 @@ export {
   mediaUrl,
   formatPrice,
 } from "@/lib/publicApi";
-import { ApiError, parseErrorMessage } from "@/lib/publicApi";
+import { ApiError, parseErrorMessage, withTimeout } from "@/lib/publicApi";
 
 /**
  * Authenticated fetch against the Workers API.
@@ -30,7 +30,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   headers.set("Authorization", `Bearer ${token}`);
   headers.set("Content-Type", "application/json");
 
-  const res = await fetch(`${apiBaseUrl}${path}`, { ...init, headers });
+  const res = await fetch(`${apiBaseUrl}${path}`, withTimeout({ ...init, headers }));
   if (!res.ok) {
     const text = await res.text();
     const { message, parsed } = parseErrorMessage(text);

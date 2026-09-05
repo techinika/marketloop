@@ -11,6 +11,8 @@
 //   GET  /api/Transactions/GetTransactionStatus?orderTrackingId=... -> { status_code, payment_status_description, amount, confirmation_code, ... }
 //   POST /api/Refund/RefundRequest                       { confirmation_code, amount, username, remarks } -> { refund_id, refund_status, ... }
 
+import type { Currency } from "../models";
+
 export interface BillingAddress {
   emailAddress?: string;
   phoneNumber?: string;
@@ -144,17 +146,18 @@ export class PesapalClient {
   async submitOrder(input: {
     id: string;
     amount: number;
+    currency: Currency;
     description: string;
     callbackUrl: string;
     notificationId: string;
     billingAddress: BillingAddress;
   }): Promise<{ orderTrackingId: string; redirectUrl: string; merchantReference: string }> {
-    const { id, amount, description, callbackUrl, notificationId, billingAddress } = input;
+    const { id, amount, currency, description, callbackUrl, notificationId, billingAddress } = input;
     const body = await this.apiJson("/api/Transactions/SubmitOrderRequest", {
       method: "POST",
       body: JSON.stringify({
         id,
-        currency: "USD",
+        currency,
         amount,
         description,
         callback_url: callbackUrl,

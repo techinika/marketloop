@@ -10,10 +10,10 @@ import { createServer } from "node:http";
 
 import app from "../src/index";
 import { FirestoreClient, type FirestoreDocument, type FirestoreField } from "../src/lib/firestore";
-import { processExpiredOrders } from "../src/lib/escrow";
-import { collections, type Bid, type Order, type Product, type User } from "../src/models";
+import { processExpiredOrders, releaseToSeller } from "../src/lib/escrow";
+import { collections, type Bid, type Order, type Product, type User, type WalletTransaction } from "../src/models";
 
-const PROJECT_ID = "marketloop-rw";
+const PROJECT_ID = "allsha-rw";
 const JWKS_PORT = 8820;
 const JWKS_URL = `http://127.0.0.1:${JWKS_PORT}/jwks`;
 const KID = "test-kid-3";
@@ -68,6 +68,10 @@ interface StoredDoc {
 
 const store = new Map<string, StoredDoc>();
 let autoCounter = 0;
+
+function nextTime(): string {
+  return "2026-08-13T00:00:01Z";
+}
 
 function docName(path: string): string {
   return `projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
@@ -180,8 +184,64 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     return jsonResponse({ responses });
   }
 
+  if (method === "POST" && rest.endsWith(":commit")) {
+    const writes = (body as { writes?: Array<Record<string, unknown>> }).writes ?? [];
+    const applied: Array<{ updateTime: string }> = [];
+    for (const write of writes) {
+      const update = write.update as
+        | {
+            name?: string;
+            fields?: Record<string, FirestoreField>;
+            currentDocument?: { updateTime?: string };
+          }
+        | undefined;
+      if (update) {
+        const path = (update.name ?? "").split("/documents/")[1] ?? "";
+        const doc = store.get(path);
+        if (!doc) return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
+        // CAS precondition: bail with 409 when the snapshot is stale.
+        if (update.currentDocument?.updateTime && doc.updateTime !== update.currentDocument.updateTime) {
+          return jsonResponse({ error: { code: 409, message: "conflict", status: "ABORTED" } }, 409);
+        }
+        doc.fields = { ...doc.fields, ...(update.fields ?? {}) };
+        doc.updateTime = nextTime();
+        applied.push({ updateTime: doc.updateTime });
+        continue;
+      }
+      const create = write.create as { name?: string; fields?: Record<string, FirestoreField> } | undefined;
+      if (create) {
+        const path = (create.name ?? "").split("/documents/")[1] ?? "";
+        if (store.has(path)) return jsonResponse({ error: "already exists" }, 409);
+        store.set(path, { fields: create.fields ?? {}, createTime: TIME, updateTime: "2026-08-13T00:00:00.000Z" });
+        applied.push({ updateTime: TIME });
+        continue;
+      }
+      const transform = write.transform as
+        | { document?: string; fieldTransforms?: Array<{ fieldPath?: string; increment?: { integerValue?: string; doubleValue?: number } }> }
+        | undefined;
+      if (transform) {
+        const path = (transform.document ?? "").split("/documents/")[1] ?? "";
+        const doc = store.get(path);
+        if (!doc) return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
+        for (const ft of transform.fieldTransforms ?? []) {
+          const delta = ft.increment
+            ? Number(ft.increment.integerValue ?? ft.increment.doubleValue ?? 0)
+            : 0;
+          const current = (decodeValue(doc.fields[ft.fieldPath!] ?? { integerValue: "0" }) as number) || 0;
+          doc.fields[ft.fieldPath!] = Number.isInteger(current + delta)
+            ? { integerValue: String(current + delta) }
+            : { doubleValue: current + delta };
+        }
+        doc.updateTime = nextTime();
+        applied.push({ updateTime: doc.updateTime });
+        continue;
+      }
+    }
+    return jsonResponse({ commitTime: nextTime(), writeResults: applied });
+  }
+
   if (method === "POST" && !rest.includes("/")) {
-    const documentId = url.searchParams.get("documentId") ?? `auto-${++autoCounter}`;
+    const documentId = url.searchParams.get("documentId") ?? `auto-${String(++autoCounter).padStart(8, "0")}`;
     const path = `${rest}/${documentId}`;
     if (store.has(path)) return jsonResponse({ error: "already exists" }, 409);
     store.set(path, { fields: body?.fields ?? {}, createTime: TIME, updateTime: TIME });
@@ -248,6 +308,8 @@ function paypackMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Re
 const pesapalSubmissions: Array<{ id: string; amount: number; notificationId: string }> = [];
 let pesapalIpnRegistrations = 0;
 let pesapalStatusByTracking = new Map<string, number>();
+// Maps tracking id -> the totalPaid expected in the GetTransactionStatus response.
+let pesapalAmountByTracking = new Map<string, number>();
 
 function pesapalMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Response {
   const url = new URL(String(input));
@@ -263,6 +325,7 @@ function pesapalMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Re
   }
   if (method === "POST" && url.pathname === "/api/Transactions/SubmitOrderRequest") {
     const trackingId = `tracking-${pesapalSubmissions.length + 1}`;
+    pesapalAmountByTracking.set(trackingId, body.amount as number);
     pesapalSubmissions.push({
       id: body.id as string,
       amount: body.amount as number,
@@ -279,6 +342,7 @@ function pesapalMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Re
     return jsonResponse({
       status_code: pesapalStatusByTracking.get(trackingId) ?? 1,
       payment_status_description: "Completed",
+      amount: pesapalAmountByTracking.get(trackingId) ?? 170,
       merchant_reference: "order-ref",
     });
   }
@@ -443,7 +507,7 @@ async function main(): Promise<void> {
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-      R2_BUCKET_NAME: "marketloop-images",
+      R2_BUCKET_NAME: "allsha-images",
       FIREBASE_PROJECT_ID: PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: "test@example.com",
       FIREBASE_PRIVATE_KEY: "test-key",
@@ -862,6 +926,33 @@ async function main(): Promise<void> {
     assert(failedE.order.escrowStatus === "failed", "pesapal order should fail on status_code 2");
     assert((failedE.product as { status: string }).status === "active", "pesapal product back to active");
 
+    // ---- E0. Concurrent release is idempotent (CAS gate) ----------------------
+    const productR = await createProduct(sellerToken, { title: "Race release", priceAmount: 20000 });
+    await reserve(buyerToken, productR);
+    const createR = await app.request("/orders", json(buyerToken, { productId: productR, phoneNumber: "0788123456" }), env);
+    const orderR = ((await createR.json()) as { order: Order & { id: string } }).order;
+    await paypackWebhook({ ref: orderR.paymentReference, status: "successful", kind: "CASHIN" });
+
+    // Three parties (buyer retry, seller, admin) all try to release at once.
+    const beforeRace = (await db.getDoc<User>(`${collections.users}/seller-1`))!.walletBalance;
+    const raceResults = await Promise.all([
+      releaseToSeller(env as never, (await getOrder(buyerToken, orderR.id)).order),
+      releaseToSeller(env as never, (await getOrder(buyerToken, orderR.id)).order),
+      releaseToSeller(env as never, (await getOrder(buyerToken, orderR.id)).order),
+    ]);
+    assert(raceResults.filter(Boolean).length === 1, "exactly one concurrent release wins");
+    const afterRace = (await db.getDoc<User>(`${collections.users}/seller-1`))!.walletBalance;
+    assert(afterRace === beforeRace + 20000, "seller credited exactly once");
+    const raceTxs = await db.queryCollection<WalletTransaction>(collections.walletTransactions, {
+      filters: [
+        { field: "orderId", op: "==", value: orderR.id },
+        { field: "type", op: "==", value: "credit" },
+      ],
+    });
+    assert(raceTxs.length === 1, "exactly one credit transaction for the released order");
+    const racedOrder = await getOrder(buyerToken, orderR.id);
+    assert(racedOrder.order.escrowStatus === "released", "order released once");
+
     // ---- E. Auto-refund: Paypack cashout (refunded) --------------------------
     const productF = await createProduct(sellerToken, { title: "Auto refund RWF", priceAmount: 10000 });
     await reserve(buyerToken, productF);
@@ -920,7 +1011,7 @@ async function main(): Promise<void> {
 
     sellerWallet = await wallet(sellerToken);
     const preWithdrawBalance = sellerWallet.walletBalance;
-    assert(preWithdrawBalance === 93150, `pre-withdraw balance should be 93150, got ${preWithdrawBalance}`);
+    assert(preWithdrawBalance === 113150, `pre-withdraw balance should be 113150, got ${preWithdrawBalance}`);
     assert(sellerWallet.transactions.length >= 3, "transaction history includes credits");
 
     const tooBig = await app.request("/wallet/withdraw", json(sellerToken, { amount: 999999, phoneNumber: "0788123456" }), env);
@@ -934,7 +1025,7 @@ async function main(): Promise<void> {
     assert(withdrawRes.status === 200, `withdraw failed with ${withdrawRes.status}`);
     const withdrawBody = (await withdrawRes.json()) as { transaction: { id: string; type: string }; walletBalance: number };
     assert(withdrawBody.transaction.type === "debit", "withdrawal is a debit");
-    assert(withdrawBody.walletBalance === 63150, "balance debited");
+    assert(withdrawBody.walletBalance === 83150, "balance debited");
     assert(paypackCashouts.length === 1, "withdrawal triggers a cashout");
     assert(
       paypackCashouts[0]!.idempotencyKey === `withdraw-seller-1-${withdrawBody.transaction.id}`,
@@ -942,7 +1033,7 @@ async function main(): Promise<void> {
     );
 
     const afterWithdraw = await wallet(sellerToken);
-    assert(afterWithdraw.walletBalance === 63150, "wallet reflects withdrawal");
+    assert(afterWithdraw.walletBalance === 83150, "wallet reflects withdrawal");
     assert(afterWithdraw.transactions[0]!.type === "debit", "debit is newest transaction");
 
     // Cashout failure restores the balance and reclassifies the transaction.
@@ -951,7 +1042,7 @@ async function main(): Promise<void> {
     assert(failWithdraw.status === 502, `failed cashout should be 502, got ${failWithdraw.status}`);
     paypackCashoutShouldFail = false;
     const restored = await wallet(sellerToken);
-    assert(restored.walletBalance === 63150, "balance restored after failed cashout");
+    assert(restored.walletBalance === 83150, "balance restored after failed cashout");
     assert(restored.transactions[0]!.type === "refund", "failed withdrawal reclassified to refund");
 
     console.log(

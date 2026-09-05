@@ -44,7 +44,7 @@ function MainHeader() {
     <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur">
       <div className="container-page flex h-14 items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <Wordmark href="/">MarketLoop</Wordmark>
+          <Wordmark href="/">ALLSHA</Wordmark>
           <nav className="ml-4 hidden items-center gap-1 md:flex">
             <MainNavLink href="/explore">Explore</MainNavLink>
             <MainNavLink href="/sell/new">Sell</MainNavLink>
@@ -154,7 +154,7 @@ function AdminHeader() {
     <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur">
       <div className="container-page flex h-14 items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <Wordmark href="/admin">MarketLoop Admin</Wordmark>
+          <Wordmark href="/admin">ALLSHA Admin</Wordmark>
           <nav className="ml-4 flex items-center gap-1">
             <AdminNavLink href="/admin">Overview</AdminNavLink>
             <AdminNavLink href="/admin/orders">Orders</AdminNavLink>

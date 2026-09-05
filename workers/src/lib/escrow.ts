@@ -13,7 +13,7 @@ import { firestoreFromEnv } from "./firestore";
 import { createNotification } from "./notify";
 import { paypackFromEnv } from "./paypack";
 import { pesapalFromEnv } from "./pesapal";
-import { collections, type Order, type Product, type User, type WalletTransaction } from "../models";
+import { collections, type Order, type Product, type WalletTransaction } from "../models";
 import type { Env } from "../types";
 
 /** Escrow hold window between payment confirmation and required delivery confirmation. */
@@ -29,31 +29,45 @@ export function sellerCreditFor(order: Pick<Order, "agreedAmount" | "deliveryFee
 
 /**
  * Releases escrow to the seller's platform wallet. Called once when BOTH the
- * buyer and the seller have confirmed delivery.
+ * buyer and the seller have confirmed delivery (or admin force-releases).
+ *
+ * The release is atomic and idempotent: the `held -> released` CAS transition,
+ * the wallet credit (server-side increment) and the wallet-transaction record
+ * all land in a single :commit write batch. Concurrent release attempts on the
+ * same order (double-click, both parties confirming at once, admin + buyer at
+ * once) race on the CAS: exactly one wins and credits; the losers return false
+ * and skip. Returns false when the order is no longer held (already released /
+ * refunded), so callers must not fall through to a second credit.
  */
 export async function releaseToSeller(
   env: Env,
   order: Order & { id: string },
-): Promise<void> {
+): Promise<boolean> {
   const db = firestoreFromEnv(env);
   const now = new Date().toISOString();
   const credit = sellerCreditFor(order);
 
-  const seller = await db.getDoc<User>(`${collections.users}/${order.sellerId}`);
-  const currentBalance = seller?.walletBalance ?? 0;
-  await db.updateDoc<User>(`${collections.users}/${order.sellerId}`, {
-    walletBalance: currentBalance + credit,
-    updatedAt: now,
-  });
+  const snap = await db.getDocWithTime<Order>(`${collections.orders}/${order.id}`);
+  if (!snap || snap.doc.escrowStatus !== "held") return false;
 
-  await db.createDoc<WalletTransaction>(collections.walletTransactions, undefined, {
-    userId: order.sellerId,
-    orderId: order.id,
-    type: "credit",
-    amount: credit,
-    currency: order.currency,
-    createdAt: now,
-  });
+  const txId = crypto.randomUUID();
+  const released = await db.commitWithCreate<WalletTransaction>(
+    `${collections.orders}/${order.id}`,
+    { escrowStatus: "released", updatedAt: now },
+    snap.updateTime,
+    collections.walletTransactions,
+    {
+      userId: order.sellerId,
+      orderId: order.id,
+      type: "credit",
+      amount: credit,
+      currency: order.currency,
+      createdAt: now,
+    },
+    txId,
+    credit !== 0 ? [{ path: `${collections.users}/${order.sellerId}`, field: "walletBalance", delta: credit }] : [],
+  );
+  if (!released) return false;
 
   await createNotification(
     env,
@@ -63,6 +77,7 @@ export async function releaseToSeller(
     `${credit} ${order.currency} from order ${order.id} is now in your wallet.`,
     { orderId: order.id, productId: order.productId },
   );
+  return true;
 }
 
 /**

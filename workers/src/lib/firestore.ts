@@ -223,6 +223,11 @@ export class FirestoreClient {
     return `${apiUrl}/projects/${this.options.projectId}/databases/(default)/documents`;
   }
 
+  /** The full Firestore documents root URL, for callers building raw :commit writes. */
+  get documentsRoot(): string {
+    return this.root;
+  }
+
   private async accessToken(): Promise<string> {
     if (this.options.accessTokenProvider) {
       return this.options.accessTokenProvider();
@@ -304,6 +309,16 @@ export class FirestoreClient {
     return { id: docId(doc.name), ...(decodeDocument(doc) as T) };
   }
 
+  /** Reads one document and also exposes its `updateTime` (for CAS writes). */
+  async getDocWithTime<T extends object>(
+    path: string,
+  ): Promise<({ doc: WithId<T>; updateTime: string }) | null> {
+    const doc = await this.get(path);
+    if (!doc) return null;
+    if (!doc.updateTime) return null;
+    return { doc: { id: docId(doc.name), ...(decodeDocument(doc) as T) }, updateTime: doc.updateTime };
+  }
+
   /** Creates a document under `path` with the given `documentId`
    * (or lets Firestore generate one when `documentId` is undefined). */
   async createDoc<T extends object>(
@@ -378,5 +393,142 @@ export class FirestoreClient {
       }
     }
     return out;
+  }
+
+  // ---- Atomic primitives --------------------------------------------------
+  //
+  // The Firestore REST API has no server-side transactions, but two primitives
+  // give us the guarantees we need:
+  //   1. `updateDocIf` — an optimistic-concurrency CAS write (updateTime
+  //      precondition). Concurrent writers on a stale snapshot get null and
+  //      must retry, closing the read-modify-write race on wallet balances.
+  //   2. `incrementField` — a server-side numeric increment transform, so
+  //      parallel credits/debits never overwrite each other.
+
+  private async commit(writes: Array<Record<string, unknown>>): Promise<boolean> {
+    try {
+      await this.requestJson(":commit", {
+        method: "POST",
+        body: JSON.stringify({ writes }),
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof FirestoreError && err.status === 409) return false;
+      throw err;
+    }
+  }
+
+  /**
+   * Transactional "all or nothing" batch of atomic writes. Returns true if the
+   * batch committed, or false if any write hit a precondition conflict (the
+   * CAS snapshot or a create target was stale — nothing was written, so the
+   * caller can re-read and retry). Lower-level primitive that
+   * `updateDocIf` / `commitWithCreate` / `acceptBidAndReserve` build on.
+   */
+  async commitWrites(writes: Array<Record<string, unknown>>): Promise<boolean> {
+    return this.commit(writes);
+  }
+
+  /**
+   * Optimistic-concurrency write: applies `data` to `path` only if the
+   * document's current `updateTime` still matches. Returns the updated
+   * document, or `null` when another write changed the doc first (caller
+   * should re-read and retry). Value-validating writes (e.g. "balance must
+   * stay >= 0") benefit from an outer loop that re-checks on conflict.
+   */
+  async updateDocIf<T extends object>(
+    path: string,
+    data: Partial<T>,
+    updateTime: string,
+  ): Promise<WithId<T> | null> {
+    const committed = await this.commit([
+      {
+        update: {
+          name: `${this.root}/${path}`,
+          fields: encodeFields(data as Record<string, unknown>),
+          currentDocument: { updateTime },
+        },
+      },
+    ]);
+    if (!committed) return null;
+    // Re-read so callers get the freshest full document.
+    return this.getDoc<T>(path);
+  }
+
+  /**
+ * Atomically CAS-updates `path`, creates `createData` (with a caller-supplied
+ * `createDocumentId`, since the REST commit API doesn't echo auto-generated
+ * ids), and applies server-side increments. All writes commit or none do. On
+ * precondition conflict it returns null (caller re-reads and retries);
+ * otherwise it returns the created document.
+ * `T` is the type of the created document; the CAS update fields and
+ * increments are plain records.
+ */
+  async commitWithCreate<T extends object>(
+    path: string,
+    data: Record<string, unknown>,
+    updateTime: string,
+    createPath: string,
+    createData: T,
+    createDocumentId: string,
+    increments?: Array<{ path: string; field: string; delta: number }>,
+  ): Promise<WithId<T> | null> {
+    const writes = [
+      {
+        update: {
+          name: `${this.root}/${path}`,
+          fields: encodeFields(data),
+          currentDocument: { updateTime },
+        },
+      },
+      {
+        create: {
+          name: `${this.root}/${createPath}/${createDocumentId}`,
+          fields: encodeFields(createData as Record<string, unknown>),
+        },
+      },
+      ...(increments ?? []).map((inc) => ({
+        transform: {
+          document: `${this.root}/${inc.path}`,
+          fieldTransforms: [
+            {
+              fieldPath: inc.field,
+              increment: Number.isInteger(inc.delta)
+                ? { integerValue: String(inc.delta) }
+                : { doubleValue: inc.delta },
+            },
+          ],
+        },
+      })),
+    ];
+    try {
+      await this.requestJson(":commit", {
+        method: "POST",
+        body: JSON.stringify({ writes }),
+      });
+    } catch (err) {
+      if (err instanceof FirestoreError && err.status === 409) return null;
+      throw err;
+    }
+    return { id: createDocumentId, ...createData };
+  }
+
+  /** Atomically increments a numeric field by `delta` (may be negative). */
+  async incrementField(path: string, field: string, delta: number): Promise<void> {
+    await this.commit([
+      {
+        transform: {
+          document: `${this.root}/${path}`,
+          fieldTransforms: [
+            {
+              fieldPath: field,
+              increment: Number.isInteger(delta)
+                ? { integerValue: String(delta) }
+                : { doubleValue: delta },
+            },
+          ],
+        },
+      },
+    ]);
   }
 }

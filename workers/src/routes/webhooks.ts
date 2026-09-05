@@ -123,8 +123,25 @@ webhookRoutes.post("/paypack", async (c) => {
 /**
  * GET/POST /webhooks/pesapal-ipn — Pesapal IPN (may arrive via GET or POST).
  * Looks up the transaction by order_tracking_id and reconciles the order.
+ *
+ * Pesapal's IPN does not sign its payload, so authenticity is hardened two ways:
+ *  1. An optional PESAPAL_IPN_SECRET query param is appended to the registered
+ *     IPN URL and must be present/valid on every callback. If the secret is
+ *     configured, requests without it are rejected.
+ *  2. If the order is still pending and the status reports COMPLETED, the
+ *     reported transaction amount must match order.totalPaid, otherwise the
+ *     order is flagged as failed rather than moved to "held".
  */
 webhookRoutes.all("/pesapal-ipn", async (c) => {
+  const ipnSecret = c.env.PESAPAL_IPN_SECRET;
+  if (ipnSecret) {
+    const provided = c.req.query("secret");
+    if (provided !== ipnSecret) {
+      console.error("Pesapal IPN: missing/invalid secret.");
+      return c.json({ status: 401 }, 401);
+    }
+  }
+
   const query = c.req.query("orderTrackingId") ?? c.req.query("OrderTrackingId");
   let orderTrackingId = query ?? null;
 
@@ -183,7 +200,30 @@ webhookRoutes.all("/pesapal-ipn", async (c) => {
 
   if (order && order.escrowStatus !== "held" && order.escrowStatus !== "released") {
     if (statusCode === 1) {
-      // COMPLETED
+      // COMPLETED — verify the reported amount matches before moving to escrow.
+      const reportedAmount = Number(tx.amount);
+      const amountMatch =
+        Number.isFinite(reportedAmount) &&
+        Math.abs(reportedAmount - order.totalPaid) < 0.01;
+      if (!amountMatch) {
+        console.error(
+          `Pesapal IPN: amount mismatch for ${orderTrackingId}: reported ${reportedAmount}, expected ${order.totalPaid}.`,
+        );
+        await db.updateDoc<Order>(`${collections.orders}/${order.id}`, {
+          escrowStatus: "failed",
+          updatedAt: now,
+        });
+        const product = await db.getDoc<Product>(`${collections.products}/${order.productId}`);
+        if (product && product.sellerId === order.sellerId) {
+          await db.updateDoc<Product>(`${collections.products}/${order.productId}`, {
+            status: "active",
+            reservedBy: null,
+            reservedUntil: null,
+            updatedAt: now,
+          });
+        }
+        return respond({ orderMerchantReference: merchantReference });
+      }
       await db.updateDoc<Order>(`${collections.orders}/${order.id}`, {
         escrowStatus: "held",
         deliveryDeadline: new Date(Date.now() + DELIVERY_DEADLINE_MS).toISOString(),

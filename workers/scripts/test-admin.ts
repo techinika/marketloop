@@ -13,7 +13,7 @@ import { FirestoreClient, type FirestoreDocument, type FirestoreField } from "..
 import { processExpiredOrders } from "../src/lib/escrow";
 import { collections, type Bid, type Notification, type Order, type Product, type User } from "../src/models";
 
-const PROJECT_ID = "marketloop-rw";
+const PROJECT_ID = "allsha-rw";
 const JWKS_PORT = 8830;
 const JWKS_URL = `http://127.0.0.1:${JWKS_PORT}/jwks`;
 const KID = "test-kid-admin";
@@ -68,6 +68,10 @@ interface StoredDoc {
 
 const store = new Map<string, StoredDoc>();
 let autoCounter = 0;
+
+function nextTime(): string {
+  return "2026-08-13T00:00:01Z";
+}
 
 function docName(path: string): string {
   return `projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
@@ -180,8 +184,61 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     return jsonResponse({ responses });
   }
 
+  if (method === "POST" && rest.endsWith(":commit")) {
+    const writes = (body as { writes?: Array<Record<string, unknown>> }).writes ?? [];
+    const applied: Array<{ updateTime: string }> = [];
+    for (const write of writes) {
+      const update = write.update as
+        | {
+            name?: string;
+            fields?: Record<string, FirestoreField>;
+            currentDocument?: { updateTime?: string };
+          }
+        | undefined;
+      if (update) {
+        const path = (update.name ?? "").split("/documents/")[1] ?? "";
+        const doc = store.get(path);
+        if (!doc) return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
+        if (update.currentDocument?.updateTime && doc.updateTime !== update.currentDocument.updateTime) {
+          return jsonResponse({ error: { code: 409, message: "conflict", status: "ABORTED" } }, 409);
+        }
+        doc.fields = { ...doc.fields, ...(update.fields ?? {}) };
+        doc.updateTime = nextTime();
+        applied.push({ updateTime: doc.updateTime });
+        continue;
+      }
+      const create = write.create as { name?: string; fields?: Record<string, FirestoreField> } | undefined;
+      if (create) {
+        const path = (create.name ?? "").split("/documents/")[1] ?? "";
+        if (store.has(path)) return jsonResponse({ error: "already exists" }, 409);
+        store.set(path, { fields: create.fields ?? {}, createTime: TIME, updateTime: TIME });
+        applied.push({ updateTime: TIME });
+        continue;
+      }
+      const transform = write.transform as
+        | { document?: string; fieldTransforms?: Array<{ fieldPath?: string; increment?: { integerValue?: string; doubleValue?: number } }> }
+        | undefined;
+      if (transform) {
+        const path = (transform.document ?? "").split("/documents/")[1] ?? "";
+        const doc = store.get(path);
+        if (!doc) return jsonResponse({ error: { code: 404, message: "Document not found.", status: "NOT_FOUND" } }, 404);
+        for (const ft of transform.fieldTransforms ?? []) {
+          const delta = ft.increment ? Number(ft.increment.integerValue ?? ft.increment.doubleValue ?? 0) : 0;
+          const current = (decodeValue(doc.fields[ft.fieldPath!] ?? { integerValue: "0" }) as number) || 0;
+          doc.fields[ft.fieldPath!] = Number.isInteger(current + delta)
+            ? { integerValue: String(current + delta) }
+            : { doubleValue: current + delta };
+        }
+        doc.updateTime = nextTime();
+        applied.push({ updateTime: doc.updateTime });
+        continue;
+      }
+    }
+    return jsonResponse({ commitTime: nextTime(), writeResults: applied });
+  }
+
   if (method === "POST" && !rest.includes("/")) {
-    const documentId = url.searchParams.get("documentId") ?? `auto-${++autoCounter}`;
+    const documentId = url.searchParams.get("documentId") ?? `auto-${String(++autoCounter).padStart(8, "0")}`;
     const path = `${rest}/${documentId}`;
     if (store.has(path)) return jsonResponse({ error: "already exists" }, 409);
     store.set(path, { fields: body?.fields ?? {}, createTime: TIME, updateTime: TIME });
@@ -226,6 +283,8 @@ function paypackMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Re
 // ---- Mock Pesapal server -----------------------------------------------------
 
 let pesapalStatusByTracking = new Map<string, number>();
+// Maps tracking id -> totalPaid for the GetTransactionStatus response (IPN amount check).
+let pesapalAmountByTracking = new Map<string, number>();
 let pesapalSubmissionCount = 0;
 
 function pesapalMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Response {
@@ -242,6 +301,7 @@ function pesapalMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Re
   if (method === "POST" && url.pathname === "/api/Transactions/SubmitOrderRequest") {
     pesapalSubmissionCount++;
     const trackingId = `tracking-${pesapalSubmissionCount}`;
+    pesapalAmountByTracking.set(trackingId, body.amount as number);
     return jsonResponse({
       order_tracking_id: trackingId,
       redirect_url: `https://pay.pesapal.com/payment/${trackingId}`,
@@ -253,6 +313,7 @@ function pesapalMock(input: Parameters<typeof fetch>[0], init?: RequestInit): Re
     return jsonResponse({
       status_code: pesapalStatusByTracking.get(trackingId) ?? 1,
       payment_status_description: "Completed",
+      amount: pesapalAmountByTracking.get(trackingId) ?? 300,
       merchant_reference: "order-ref",
     });
   }
@@ -404,7 +465,7 @@ async function main(): Promise<void> {
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-      R2_BUCKET_NAME: "marketloop-images",
+      R2_BUCKET_NAME: "allsha-images",
       FIREBASE_PROJECT_ID: PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: "test@example.com",
       FIREBASE_PRIVATE_KEY: "test-key",
