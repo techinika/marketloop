@@ -1,10 +1,10 @@
 import { CATEGORIES } from "@/types";
-import { craftPlaceholder } from "@/lib/dummyData";
+import { categoryImage } from "@/lib/dummyData";
 
 export interface CategoryMeta {
   name: string;
   blurb: string;
-  /** Self-contained placeholder image (no upload needed for the browse tiles). */
+  /** Bundled photo for the browse tiles (falls back to any uploaded photo). */
   image: string;
 }
 
@@ -29,7 +29,7 @@ const BLURBS: Record<string, string> = {
 export const FEATURED_CATEGORIES: CategoryMeta[] = CATEGORIES.map((name) => ({
   name,
   blurb: BLURBS[name] ?? "Handmade pieces from Rwandan artisans.",
-  image: craftPlaceholder(name, name),
+  image: categoryImage(name),
 }));
 
 /** URL slug for a category name (e.g. "Jewelry & Beadwork" -> "jewelry-and-beadwork"). */

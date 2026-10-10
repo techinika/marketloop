@@ -2,12 +2,23 @@
 // collection or the API is unreachable at render time). Real data always wins.
 //
 // Photos live in `public/` and are referenced by root-relative path (e.g.
-// `/igiseke.jpeg`), which `mediaUrl()` passes through untouched. Categories
-// without a photo fall back to a self-contained SVG `data:` placeholder so the
-// demo never shows a broken image. Real listings upload media to Cloudflare R2
-// (see /uploads/presign + GET /media/*) and store the returned object key.
+// `/igiseke.jpeg`), which `mediaUrl()` passes through untouched. A category
+// with no photo of its own falls back to any bundled photo (never a broken
+// image); the SVG `craftPlaceholder` is only a last resort if `public/` is bare.
+// Real listings upload media to Cloudflare R2 (see /uploads/presign +
+// GET /media/*) and store the returned object key.
 
 import type { ArtisanStorefront, Currency, Product } from "@/types";
+
+/** Every bundled craft photo in `public/` (see `public/`). */
+export const ALL_PHOTOS: string[] = [
+  "/igiseke.jpeg",
+  "/igisabo.jpeg",
+  "/igisabo-inkongoro.jpeg",
+  "/igisabo-milk.jpeg",
+  "/imigongo.jpeg",
+  "/uducuma.webp",
+];
 
 /** Bundled craft photos in `public/`, keyed by category (see `public/`). */
 const CATEGORY_IMAGES: Record<string, string[]> = {
@@ -17,6 +28,29 @@ const CATEGORY_IMAGES: Record<string, string[]> = {
   "Jewelry & Beadwork": ["/uducuma.webp"],
   "Textiles & Batik": ["/igisabo-milk.jpeg"],
 };
+
+/** Stable non-negative hash so a category/label always maps to the same photo. */
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Deterministically picks `count` distinct bundled photos for a seed string.
+ * Used whenever a category has no photo of its own, so a placeholder is never
+ * shown (per product brief: fall back to any of the uploaded photos).
+ */
+function pickPhotos(seed: string, count: number): string[] {
+  const pool = ALL_PHOTOS;
+  if (pool.length === 0) return [];
+  const start = hashString(seed) % pool.length;
+  const take = Math.min(count, pool.length);
+  return Array.from({ length: take }, (_, i) => pool[(start + i) % pool.length]);
+}
 
 /** Warm-palette gradient pairs keyed by craft category. */
 const CATEGORY_TONES: Record<string, [string, string]> = {
@@ -59,10 +93,21 @@ export function craftPlaceholder(category: string, label: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-/** Bundled photos for a category, or a single SVG placeholder when none exist. */
+/**
+ * Bundled photos for a category. Categories without their own photo fall back
+ * to any uploaded photo (never an SVG placeholder).
+ */
 function imagesForCategory(category: string, label: string): string[] {
   const photos = CATEGORY_IMAGES[category];
-  return photos && photos.length > 0 ? photos : [craftPlaceholder(category, label)];
+  if (photos && photos.length > 0) return photos;
+  return pickPhotos(`${category}:${label}`, 2);
+}
+
+/** A single bundled photo for a category tile; falls back to any uploaded photo. */
+export function categoryImage(category: string): string {
+  const photos = CATEGORY_IMAGES[category];
+  if (photos && photos.length > 0) return photos[0];
+  return pickPhotos(category, 1)[0] ?? craftPlaceholder(category, category);
 }
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();

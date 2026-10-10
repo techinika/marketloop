@@ -5,10 +5,10 @@
 // NOTE — IMAGES: products reference the sample craft photos bundled in the
 // frontend's `public/` folder (root-relative paths such as `/igiseke.jpeg`),
 // which the frontend resolves directly. This keeps the seed self-contained —
-// no R2 object or external host. Categories without a bundled photo fall back
-// to a self-contained SVG `data:` placeholder. Real listings upload media to
-// Cloudflare R2 and store the returned object key. The script is idempotent:
-// it updates existing docs instead of failing on a second run.
+// no R2 object or external host. A category without its own bundled photo
+// falls back to any bundled photo (never a broken image). Real listings upload
+// media to Cloudflare R2 and store the returned object key. The script is
+// idempotent: it updates existing docs instead of failing on a second run.
 //
 // Reads credentials from .dev.vars (or environment variables):
 //   FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY
@@ -73,6 +73,16 @@ const CATEGORY_TONES: Record<string, [string, string]> = {
   "Other Handmade": ["#b8a48c", "#6b5f57"],
 };
 
+/** Every bundled craft photo in the frontend's `public/` (see `frontend/public`). */
+const ALL_PHOTOS: string[] = [
+  "/igiseke.jpeg",
+  "/igisabo.jpeg",
+  "/igisabo-inkongoro.jpeg",
+  "/igisabo-milk.jpeg",
+  "/imigongo.jpeg",
+  "/uducuma.webp",
+];
+
 /** Bundled craft photos in the frontend's `public/`, keyed by category. */
 const CATEGORY_IMAGES: Record<string, string[]> = {
   "Agaseke Baskets": ["/igiseke.jpeg", "/igisabo.jpeg", "/igisabo-inkongoro.jpeg"],
@@ -82,15 +92,39 @@ const CATEGORY_IMAGES: Record<string, string[]> = {
   "Textiles & Batik": ["/igisabo-milk.jpeg"],
 };
 
-/** Bundled photos for a category, or a single SVG placeholder when none exist. */
-function imagesForCategory(category: string): string[] {
-  const photos = CATEGORY_IMAGES[category];
-  return photos && photos.length > 0 ? photos : [placeholderPhoto(category)];
+/** Stable non-negative hash so a category always maps to the same photo. */
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/** Deterministically picks `count` distinct bundled photos for a seed string. */
+function pickPhotos(seed: string, count: number): string[] {
+  const pool = ALL_PHOTOS;
+  if (pool.length === 0) return [];
+  const start = hashString(seed) % pool.length;
+  const take = Math.min(count, pool.length);
+  return Array.from({ length: take }, (_, i) => pool[(start + i) % pool.length] as string);
 }
 
 /**
- * Demo placeholder photo as a self-contained SVG data URI, used only for
- * categories without a bundled photo. Real listings upload their media to
+ * Bundled photos for a category. Categories without their own photo fall back
+ * to any uploaded photo (never a placeholder) per product brief.
+ */
+function imagesForCategory(category: string): string[] {
+  const photos = CATEGORY_IMAGES[category];
+  if (photos && photos.length > 0) return photos;
+  const picked = pickPhotos(category, 2);
+  return picked.length > 0 ? picked : [placeholderPhoto(category)];
+}
+
+/**
+ * Last-resort demo placeholder as a self-contained SVG data URI, used only if
+ * no bundled photos exist at all. Real listings upload their media to
  * Cloudflare R2 and store the returned object key instead.
  */
 function placeholderPhoto(category: string): string {
