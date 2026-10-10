@@ -34,6 +34,16 @@ export function ListRowSkeleton() {
   );
 }
 
+/** Skeleton form field — label + input height, for settings/form loading. */
+export function FieldSkeleton() {
+  return (
+    <div className="space-y-2">
+      <Skeleton className="h-3.5 w-24" />
+      <Skeleton className="h-11 w-full rounded-input" />
+    </div>
+  );
+}
+
 /** Skeleton table body — mirrors admin table rows. */
 export function TableSkeleton({ rows = 6, columns = 7 }: { rows?: number; columns?: number }) {
   return (

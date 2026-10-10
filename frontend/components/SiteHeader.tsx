@@ -118,6 +118,13 @@ function MainHeader() {
               My Listings
             </Link>
             <Link
+              href="/dashboard/storefront"
+              onClick={() => setMobileOpen(false)}
+              className="rounded-xl px-3 py-2.5 text-sm font-medium text-secondary transition-colors hover:bg-surface-muted hover:text-foreground"
+            >
+              Storefront
+            </Link>
+            <Link
               href="/wallet"
               onClick={() => setMobileOpen(false)}
               className="rounded-xl px-3 py-2.5 text-sm font-medium text-secondary transition-colors hover:bg-surface-muted hover:text-foreground"
@@ -158,6 +165,7 @@ function AdminHeader() {
           <nav className="ml-4 flex items-center gap-1">
             <AdminNavLink href="/admin">Overview</AdminNavLink>
             <AdminNavLink href="/admin/orders">Orders</AdminNavLink>
+            <AdminNavLink href="/admin/verifications">Verifications</AdminNavLink>
             <AdminNavLink href="/admin/users">Users</AdminNavLink>
           </nav>
         </div>

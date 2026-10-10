@@ -102,8 +102,9 @@ export function AccountMenu() {
   const initial = (user.displayName ?? user.email ?? "U").charAt(0).toUpperCase();
   const items: Array<{ href: string; label: string }> = [
     { href: "/dashboard", label: "Dashboard" },
-    { href: "/my-bids", label: "My Bids" },
     { href: "/sell/my-listings", label: "My Listings" },
+    { href: "/dashboard/storefront", label: "Storefront" },
+    { href: "/my-bids", label: "My Bids" },
     { href: "/wallet", label: "Wallet" },
     { href: "/account/verification", label: "Verification" },
   ];

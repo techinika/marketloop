@@ -170,17 +170,18 @@ reservations cleared in every refund/cancellation path.
 | `/c/[category]`  | Crawlable category landing page (one per craft): prerendered, own metadata/canonical, `CollectionPage` + breadcrumb JSON-LD, product grid |
 | `/artisan`       | All artisan shops (best-rated first) with storefront cards |
 | `/artisan/[uid]` | Artisan storefront: profile (bio, region, specialties, rating, verified badge) + the shop's active listings; `ProfilePage` JSON-LD |
-| `/sell/new`      | Artisan listing form: drag-drop photo upload (reorder/remove), optional video, price (RWF/USD), delivery options, production time (days), customizable toggle with a structured question builder (text / choice / image-upload, required flag, price adjustment, choices), reference-upload toggle |
+| `/sell/new`      | Artisan listing form (two-column): a made-to-order vs ready-to-ship selector (which drives the fields shown), photo drag-drop upload (reorder/remove), optional video, discovery fields (tags, materials, region), price (RWF/USD) + delivery options, and — for made-to-order — production time (days), a customizable toggle with a structured question builder (text / choice / image-upload, required flag, price adjustment, choices), and a reference-upload toggle; ready-to-ship listings take an in-stock quantity |
 | `/product/[id]`  | Listing detail: gallery, price, badges (customizable / reference welcome / made-to-order with production time), description, delivery info, artisan card; bid panel (make/update/withdraw offers) or Buy now (reserve) |
 | `/my-bids`       | Buyer dashboard: all offers with status, withdraw active ones, checkout when accepted |
-| `/sell/my-listings` | Artisan dashboard: own listings with status badges, manage offers per bidding listing |
+| `/sell/my-listings` | Artisan dashboard: own listings with type + status badges and inline inventory controls — ready-to-ship stock quantity (`0` = sold out) and made-to-order order cap / pause-resume |
 | `/sell/my-listings/[id]/bids` | Artisan's offers for one listing, sorted highest first, Accept |
 | `/checkout/[productId]` | Checkout for a reserved item: answers the artisan's customization questions (choice/text/image, with price adjustments shown live), optional reference image + notes, a payment-plan selector (deposit 50/50 vs pay in full), the production-time estimate, then payment — RWF mobile-money (Paypack) with a phone field · USD redirects to the Pesapal hosted page |
 | `/checkout/callback`    | Pesapal redirect landing page: polls the order until payment settles, then links to the order page |
 | `/orders/[id]`          | Order status in plain language with a made-to-order step tracker (Deposit → In production → Ready → Delivery → Released), artisan "Mark as ready", customer "Pay remaining balance" (deposit plan), mid-production cancellation request/response with the 25% split explained, an order brief (customization answers, reference image, notes), delivery-confirm buttons for both parties, and the 5-day (delivery) / 3-day (final payment) countdowns |
 | `/account/verification` | Identity verification: verify a phone number via OTP, then upload an ID document (national ID / passport / driving licence) for admin review — status badge + rejection reason |
 | `/wallet`               | Luma-style wallet: available balance, activity (sales/withdrawals/refunds), RWF withdrawal to mobile money |
-| `/dashboard`            | User dashboard: sales + purchases with escrow status, quick links to bids/wallet (see header account menu) |
+| `/dashboard`            | User dashboard: active-listing / in-escrow / awaiting-payment / wallet stat cards, quick links (sell, storefront, listings, bids, wallet, verification), and sales + purchases with escrow status and listing-kind badges (see header account menu) |
+| `/dashboard/storefront` | Storefront settings: edit the caller's public shop — store name, region, story/bio and specialty tags (`PATCH /artisans/me`) — with a link to the public artisan page |
 | `/admin`                | Admin overview: active listings, pending/held orders, refund attention, GMV this month (RWF + USD) |
 | `/admin/orders`         | All escrow orders (needs-attention pinned first), filter by status, link to detail |
 | `/admin/orders/[id]`    | Order detail + parties + wallet transactions; Mark refunded / Force release actions (audited) |
@@ -268,8 +269,9 @@ npm run seed
 Creates three seed artisans (`seed-artisan-001..003`, verified) and five seed
 products (`seed-handi-basket` / `-imigongo` / `-nameplate` / `-ketange` /
 `-batik`) spanning made-to-order and ready-to-ship, then reads them back and
-queries active products. Images are self-contained SVG `data:` URIs, so the seed
-needs no R2 upload.
+queries active products. Listing images point at the bundled photos in
+`frontend/public` (root-relative paths like `/igiseke.jpeg`), so the seed needs
+no R2 upload.
 
 ## Tests (no real Firebase needed)
 
@@ -351,7 +353,7 @@ npm test
 - [x] Public artisan storefronts: `GET /artisans` (featured, best-rated) + `GET /artisans/{uid}` (profile + active listings) + `PATCH /artisans/me`
 - [x] Crawlable category landing pages (`/c/[category]`), artisan index (`/artisan`) and storefronts (`/artisan/[uid]`) — hooking homepage browse tiles and product cards to shops
 - [x] Informational pages: About, FAQ, Contact, Shipping & returns, Terms of Use, Privacy Policy (shared `ContentPage` shell)
-- [x] Demo fallback data (`lib/dummyData.ts`, self-contained SVG `data:` URIs) shown only when the API returns nothing — homepage, explore, category and storefront pages
+- [x] Demo fallback data (`lib/dummyData.ts`) using the bundled `frontend/public` photos (plus inline SVG placeholders when a craft has none) shown only when the API returns nothing — homepage, explore, category and storefront pages
 - [x] Sell form (`/sell/new`) with drag-drop photo upload + R2 presigned upload flow
 - [x] Product detail page (`/product/[id]`) with gallery, artisan info, bid panel + Buy now
 - [x] Bidding: offers (place/update/withdraw), anonymous public summary, artisan accept → reserve
@@ -368,7 +370,8 @@ npm test
 - [x] Artisan wallet: balance + transaction history, RWF withdrawal via Paypack cashout
 - [x] Auto-refund cron (hourly): Paypack refunds immediately, Pesapal submits a refund request
 - [x] In-app notifications: bell + unread badge (30s/focus polling), mark-read, event triggers across bidding/payment/escrow/refunds + 24h delivery-deadline warnings
-- [x] User dashboard (`/dashboard`): sales + purchases with escrow status
+- [x] User dashboard (`/dashboard`): active-listing / in-escrow / awaiting-payment / wallet stat cards, sales + purchases with escrow status and listing-kind badges, quick links
+- [x] Storefront settings (`/dashboard/storefront`): edit store name, region, bio and specialties (`PATCH /artisans/me`); artisan listings get inline inventory controls (ready-to-ship stock, made-to-order order cap + pause/resume)
 - [x] Admin panel: isAdmin-gated overview/stats, order oversight (needs-attention pinned), mark-refunded + force-release (audited), user search
 - [x] Phone + identity verification: OTP by SMS (KV-backed) + ID-document upload → admin review → verified badge (informational, never gates selling)
 - [x] Per-order buyer/artisan chat (`messages` collection)

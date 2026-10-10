@@ -1,12 +1,22 @@
 // Demo fallback data — used ONLY when the database returns nothing (empty
 // collection or the API is unreachable at render time). Real data always wins.
 //
-// Images are inline SVG `data:` URIs so the fallback is fully self-contained:
-// no R2 object, no external host, and nothing to maintain. Real listings upload
-// their media to Cloudflare R2 (see /uploads/presign + GET /media/*), and those
-// keys are rendered through `mediaUrl()` like any other.
+// Photos live in `public/` and are referenced by root-relative path (e.g.
+// `/igiseke.jpeg`), which `mediaUrl()` passes through untouched. Categories
+// without a photo fall back to a self-contained SVG `data:` placeholder so the
+// demo never shows a broken image. Real listings upload media to Cloudflare R2
+// (see /uploads/presign + GET /media/*) and store the returned object key.
 
 import type { ArtisanStorefront, Currency, Product } from "@/types";
+
+/** Bundled craft photos in `public/`, keyed by category (see `public/`). */
+const CATEGORY_IMAGES: Record<string, string[]> = {
+  "Agaseke Baskets": ["/igiseke.jpeg", "/igisabo.jpeg", "/igisabo-inkongoro.jpeg"],
+  "Imigongo Art": ["/imigongo.jpeg"],
+  "Wood Carving": ["/igisabo-inkongoro.jpeg"],
+  "Jewelry & Beadwork": ["/uducuma.webp"],
+  "Textiles & Batik": ["/igisabo-milk.jpeg"],
+};
 
 /** Warm-palette gradient pairs keyed by craft category. */
 const CATEGORY_TONES: Record<string, [string, string]> = {
@@ -47,6 +57,12 @@ export function craftPlaceholder(category: string, label: string): string {
   <text x="400" y="600" text-anchor="middle" font-family="Georgia, serif" font-size="26" fill="#fffdfa" fill-opacity="0.92">${label}</text>
 </svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+/** Bundled photos for a category, or a single SVG placeholder when none exist. */
+function imagesForCategory(category: string, label: string): string[] {
+  const photos = CATEGORY_IMAGES[category];
+  return photos && photos.length > 0 ? photos : [craftPlaceholder(category, label)];
 }
 
 const now = new Date("2026-01-01T00:00:00.000Z").toISOString();
@@ -179,7 +195,7 @@ function toProduct(seed: ProductSeed, index: number): Product {
     isNegotiable: true,
     isBiddingEnabled: false,
     conditionNote: `Made by hand in ${seed.region}.`,
-    images: [craftPlaceholder(seed.category, seed.category)],
+    images: imagesForCategory(seed.category, seed.title),
     videoUrl: null,
     deliveryFee: 2500,
     deliveryFeePayer: "buyer",

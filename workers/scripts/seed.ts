@@ -2,11 +2,13 @@
 // client: three artisan profiles plus five sample products (three made to
 // order, two ready to ship). Run with: npm run seed
 //
-// NOTE — IMAGES: every product uses a self-contained SVG `data:` placeholder
-// (no R2 object, no external host) so seeded listings render in development.
-// Real listings upload media to Cloudflare R2 and store the returned object
-// key; replace these placeholders with real R2 keys before launch. The script
-// is idempotent: it updates existing docs instead of failing on a second run.
+// NOTE — IMAGES: products reference the sample craft photos bundled in the
+// frontend's `public/` folder (root-relative paths such as `/igiseke.jpeg`),
+// which the frontend resolves directly. This keeps the seed self-contained —
+// no R2 object or external host. Categories without a bundled photo fall back
+// to a self-contained SVG `data:` placeholder. Real listings upload media to
+// Cloudflare R2 and store the returned object key. The script is idempotent:
+// it updates existing docs instead of failing on a second run.
 //
 // Reads credentials from .dev.vars (or environment variables):
 //   FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY
@@ -71,10 +73,25 @@ const CATEGORY_TONES: Record<string, [string, string]> = {
   "Other Handmade": ["#b8a48c", "#6b5f57"],
 };
 
+/** Bundled craft photos in the frontend's `public/`, keyed by category. */
+const CATEGORY_IMAGES: Record<string, string[]> = {
+  "Agaseke Baskets": ["/igiseke.jpeg", "/igisabo.jpeg", "/igisabo-inkongoro.jpeg"],
+  "Imigongo Art": ["/imigongo.jpeg"],
+  "Wood Carving": ["/igisabo-inkongoro.jpeg"],
+  "Jewelry & Beadwork": ["/uducuma.webp"],
+  "Textiles & Batik": ["/igisabo-milk.jpeg"],
+};
+
+/** Bundled photos for a category, or a single SVG placeholder when none exist. */
+function imagesForCategory(category: string): string[] {
+  const photos = CATEGORY_IMAGES[category];
+  return photos && photos.length > 0 ? photos : [placeholderPhoto(category)];
+}
+
 /**
- * Demo placeholder photo as a self-contained SVG data URI, so seeded listings
- * render without an R2 object or an external image host. Real listings upload
- * their media to Cloudflare R2 and store the returned object key instead.
+ * Demo placeholder photo as a self-contained SVG data URI, used only for
+ * categories without a bundled photo. Real listings upload their media to
+ * Cloudflare R2 and store the returned object key instead.
  */
 function placeholderPhoto(category: string): string {
   // TODO(demo): replace with a real media key uploaded to R2
@@ -373,7 +390,7 @@ async function main(): Promise<void> {
       isNegotiable: true,
       isBiddingEnabled: false,
       conditionNote: `Made by hand in ${listing.region ?? "Rwanda"}.`,
-      images: [placeholderPhoto(listing.category)],
+      images: imagesForCategory(listing.category),
       videoUrl: null,
       deliveryFee: listing.deliveryFee,
       deliveryFeePayer: "buyer",

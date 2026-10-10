@@ -159,6 +159,10 @@ error):
   like a shop, ranks by rating; default 8 / max 24); `GET /artisans/{uid}`
   returns the profile plus its active listings; `PATCH /artisans/me` lets an
   artisan edit their own storefront fields. Only public fields leave the API.
+  The frontend storefront settings page (`/dashboard/storefront`) edits those
+  fields, and `/sell/my-listings` exposes inline inventory controls backed by
+  `PATCH /products/:id` (ready-to-ship `quantityAvailable`; made-to-order
+  `maxConcurrentOrders` and `acceptingOrders` pause/resume).
 - **Crawlable discovery pages** (frontend): `/c/[category]` (one prerendered
   page per craft, `CollectionPage` + `BreadcrumbList` JSON-LD), `/artisan`
   (index) and `/artisan/[uid]` (`ProfilePage` JSON-LD). These give category and
@@ -166,8 +170,9 @@ error):
   canonicalized to `/explore` so it never creates near-duplicate index pages.
 - **Demo fallback** (`frontend/lib/dummyData.ts`): when the API is unreachable or
   a collection is empty, the homepage, `/explore` (unfiltered only), category and
-  storefront pages render self-contained demo pieces (inline SVG `data:` URIs, no
-  R2 object). Real data always wins; nothing is persisted.
+  storefront pages render demo pieces using the bundled photos in
+  `frontend/public` (with inline SVG `data:` placeholders when a craft has none;
+  no R2 object needed). Real data always wins; nothing is persisted.
 
 ## Error handling & validation
 

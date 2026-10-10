@@ -30,11 +30,14 @@ Open http://localhost:3000. The Workers API is expected at `http://localhost:878
 - `app/` — App Router routes. Public pages (home, explore, product detail,
   category landing pages, artisan index/storefronts, about/faq/contact/shipping,
   terms/privacy) are server components that fetch with `lib/publicApi.ts`;
-  authenticated pages (dashboard, wallet, my-bids, sell, checkout, orders, admin)
-  are gated by route-level `layout.tsx` files and fetch with `lib/api.ts`.
+  authenticated pages (dashboard + storefront settings, wallet, my-bids, sell,
+  checkout, orders, admin) are gated by route-level `layout.tsx` files and fetch
+  with `lib/api.ts`.
 - `lib/` — API clients, environment config (`lib/env.ts`), shared filter state
   (`lib/exploreFilters.ts`), category metadata + slug helpers (`lib/categoryMeta.ts`),
-  SEO/JSON-LD helpers (`lib/seo.ts`), demo fallback data (`lib/dummyData.ts`),
+  SEO/JSON-LD helpers (`lib/seo.ts`), demo fallback data (`lib/dummyData.ts`,
+  which uses the bundled `public/` photos and falls back to inline SVG `data:`
+  placeholders),
   Firebase auth glue, and the client-side image downscaler (`lib/upload.ts` →
   `prepareImageFile`, caps photos at ~1600px and re-encodes to WebP before
   presigned upload).

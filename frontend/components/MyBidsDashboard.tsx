@@ -7,7 +7,7 @@ import type { User as FirebaseUser } from "firebase/auth";
 import { formatPrice, mediaUrl } from "@/lib/api";
 import { observeAuthState } from "@/lib/firebase";
 import { fetchMyBids, withdrawBid } from "@/lib/products";
-import type { MyBidRow } from "@/types";
+import type { MyBidRow, ProductStatus } from "@/types";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/Toast";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -17,6 +17,14 @@ const STATUS_BADGE: Record<MyBidRow["status"], { label: string; cls: string }> =
   active: { label: "Active", cls: "badge-success" },
   withdrawn: { label: "Withdrawn", cls: "badge-neutral" },
   accepted: { label: "Accepted", cls: "badge-accent" },
+};
+
+const PRODUCT_STATUS_LABEL: Record<ProductStatus, string> = {
+  active: "available",
+  reserved: "reserved",
+  sold: "sold",
+  sold_out: "sold out",
+  removed: "removed",
 };
 
 export function MyBidsDashboard() {
@@ -74,6 +82,7 @@ export function MyBidsDashboard() {
   return (
     <div className="container-page max-w-3xl py-8 sm:py-12">
       <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">My Bids</h1>
+      <p className="mt-1 text-sm text-muted">Offers you&apos;ve made across the marketplace, newest first.</p>
 
       {!user ? (
         <div className="mt-8">
@@ -136,6 +145,11 @@ export function MyBidsDashboard() {
                   >
                     {bid.product?.title ?? "Product"}
                   </Link>
+                  {bid.status === "active" && bid.product && bid.product.status !== "active" && (
+                    <p className="mt-0.5 text-xs text-muted">
+                      This listing is {PRODUCT_STATUS_LABEL[bid.product.status]}.
+                    </p>
+                  )}
                   <p className="mt-1 text-base font-semibold text-foreground">
                     {formatPrice(bid.amount, bid.currency)}
                   </p>

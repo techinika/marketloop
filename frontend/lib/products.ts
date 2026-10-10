@@ -14,6 +14,7 @@ import type {
   Product,
   ProductDetail,
   ProductFeed,
+  ProductStatus,
   ProductType,
   ArtisanBidRow,
 } from "@/types";
@@ -206,4 +207,46 @@ export async function reserveProduct(productId: string): Promise<{ product: Prod
 export async function fetchMyListings(): Promise<Product[]> {
   const res = await apiFetch<{ products: Product[] }>("/products/mine");
   return res.products;
+}
+
+/** Fields an artisan may change after creating a listing. */
+export interface ProductUpdateInput {
+  title?: string;
+  description?: string;
+  category?: string;
+  priceAmount?: number;
+  priceCurrency?: Currency;
+  isNegotiable?: boolean;
+  isBiddingEnabled?: boolean;
+  conditionNote?: string;
+  images?: string[];
+  videoUrl?: string | null;
+  deliveryFee?: number;
+  deliveryFeePayer?: DeliveryFeePayer;
+  tags?: string[];
+  materials?: string[];
+  region?: string | null;
+  isCustomizable?: boolean;
+  /** Ready-to-ship only: units in stock (0 => sold out). */
+  quantityAvailable?: number;
+  /** Made-to-order only: estimated days to make the piece (1-365). */
+  productionTimeDays?: number;
+  /** Made-to-order only: structured customization questions. */
+  customizationOptions?: CustomizationOption[];
+  /** Made-to-order only: allow a reference image + free-text brief. */
+  allowsReferenceUpload?: boolean;
+  /** Made-to-order only: cap on concurrent open orders; null = unlimited. */
+  maxConcurrentOrders?: number | null;
+  /** Made-to-order only: whether to accept new orders (false also pauses). */
+  acceptingOrders?: boolean;
+  status?: ProductStatus;
+}
+
+/** PATCH /products/:id — the artisan edits one of their own listings. */
+export async function updateProduct(id: string, input: ProductUpdateInput): Promise<Product> {
+  const res = await apiFetch<{ product: Product }>(`/products/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+  return res.product;
 }
