@@ -4,7 +4,7 @@
 interface __BaseEnv_Env {
 	OTP_KV: KVNamespace;
 	IMAGES: R2Bucket;
-	FIREBASE_PROJECT_ID: "allsha-rw";
+	FIREBASE_PROJECT_ID: "handi-rw";
 	R2_ACCOUNT_ID: "7ffa31fde77e77578b9cb9264daa877e";
 	R2_BUCKET_NAME: "handi-assets";
 	FRONTEND_URL: "https://handi.studio";

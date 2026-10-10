@@ -6,7 +6,7 @@
 import { FirestoreClient, decodeValue, type FirestoreDocument, type FirestoreField } from "../src/lib/firestore";
 import { collections, type Product, type User } from "../src/models";
 
-const PROJECT_ID = "allsha-rw";
+const PROJECT_ID = "handi-rw";
 const API_URL = "http://firestore.local/v1";
 
 interface StoredDoc {

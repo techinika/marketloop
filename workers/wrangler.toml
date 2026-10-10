@@ -21,7 +21,7 @@ preview_id = "e883769436484f8e977055adb8fcb8ab"
 
 # --- Vars (non-secret) ---
 [vars]
-FIREBASE_PROJECT_ID = "allsha-rw"
+FIREBASE_PROJECT_ID = "handi-rw"
 R2_ACCOUNT_ID = "7ffa31fde77e77578b9cb9264daa877e"
 R2_BUCKET_NAME = "handi-assets"
 FRONTEND_URL = "https://handi.studio"

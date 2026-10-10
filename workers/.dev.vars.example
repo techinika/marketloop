@@ -2,8 +2,8 @@
 # Copy to `.dev.vars` and fill in real values. Never commit `.dev.vars`.
 
 # --- Firestore (Google service account) ---
-FIREBASE_PROJECT_ID=allsha-rw
-FIREBASE_CLIENT_EMAIL=your-service-account@allsha-rw.iam.gserviceaccount.com
+FIREBASE_PROJECT_ID=handi-rw
+FIREBASE_CLIENT_EMAIL=your-service-account@handi-rw.iam.gserviceaccount.com
 # Keep the key on a single line with literal \n escapes:
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvA...\n-----END PRIVATE KEY-----\n"
 # Optional: override the Google JWKS endpoint (used by test-auth, local mock):

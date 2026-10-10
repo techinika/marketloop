@@ -13,7 +13,7 @@ import { FirestoreClient, type FirestoreDocument, type FirestoreField } from "..
 import { processExpiredOrders } from "../src/lib/escrow";
 import { collections, type Bid, type Notification, type Order, type Product, type User } from "../src/models";
 
-const PROJECT_ID = "allsha-rw";
+const PROJECT_ID = "handi-rw";
 const JWKS_PORT = 8830;
 const JWKS_URL = `http://127.0.0.1:${JWKS_PORT}/jwks`;
 const KID = "test-kid-admin";
