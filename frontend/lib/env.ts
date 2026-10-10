@@ -5,7 +5,7 @@
  */
 
 export const siteUrl =
-  process.env.NEXT_PUBLIC_SITE_URL ?? "https://allsha.techinika.com";
+  process.env.NEXT_PUBLIC_SITE_URL ?? "https://handi.studio";
 
 export const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8787";
