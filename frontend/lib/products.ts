@@ -1,17 +1,21 @@
 import { apiFetch } from "@/lib/api";
 import { publicFetch } from "@/lib/publicApi";
 import type {
+  ArtisanProfile,
+  ArtisanStorefront,
   Bid,
   BidSummary,
   CheckoutInfo,
   Currency,
+  CustomizationOption,
   DeliveryFeePayer,
   FeedSortBy,
   MyBidRow,
   Product,
   ProductDetail,
   ProductFeed,
-  SellerBidRow,
+  ProductType,
+  ArtisanBidRow,
 } from "@/types";
 
 export interface ProductInput {
@@ -27,6 +31,24 @@ export interface ProductInput {
   videoUrl: string | null;
   deliveryFee: number;
   deliveryFeePayer: DeliveryFeePayer;
+  /** Immutable listing kind chosen at creation. */
+  productType: ProductType;
+  /** Free-text discovery labels (e.g. "sisal", "wedding"). */
+  tags: string[];
+  /** Materials used in the piece (e.g. "Banana Fiber"). */
+  materials: string[];
+  /** Region/province the piece is made in. */
+  region: string | null;
+  /** Made-to-order: units in stock is meaningless; always 0. */
+  quantityAvailable: number;
+  /** Made-to-order only: estimated days to make this piece (1-365). */
+  productionTimeDays: number;
+  /** Made-to-order only: whether buyers answer structured customization questions. */
+  isCustomizable: boolean;
+  /** Made-to-order only: structured questions; validated only when isCustomizable. */
+  customizationOptions: CustomizationOption[];
+  /** Made-to-order only: lets the buyer attach a reference image + free-text brief. */
+  allowsReferenceUpload: boolean;
 }
 
 export interface FeedFilters {
@@ -38,6 +60,14 @@ export interface FeedFilters {
   priceMin?: number;
   priceMax?: number;
   sortBy?: FeedSortBy;
+  /** One listing kind or the other. */
+  productType?: ProductType;
+  /** Discovery tags (OR match, up to 10). */
+  tags?: string[];
+  /** Materials (OR match, up to 10). */
+  materials?: string[];
+  /** Region/province equality match. */
+  region?: string;
   page?: number;
   pageSize?: number;
 }
@@ -63,13 +93,52 @@ export async function fetchFeed(filters: FeedFilters = {}): Promise<ProductFeed>
   if (filters.priceMin !== undefined) params.set("priceMin", String(filters.priceMin));
   if (filters.priceMax !== undefined) params.set("priceMax", String(filters.priceMax));
   if (filters.sortBy) params.set("sortBy", filters.sortBy);
+  if (filters.productType) params.set("productType", filters.productType);
+  if (filters.tags?.length) params.set("tags", filters.tags.join(","));
+  if (filters.materials?.length) params.set("materials", filters.materials.join(","));
+  if (filters.region) params.set("region", filters.region);
   params.set("page", String(filters.page ?? 1));
   params.set("pageSize", String(filters.pageSize ?? 20));
   const qs = params.toString();
   return publicFetch<ProductFeed>(`/products${qs ? `?${qs}` : ""}`);
 }
 
-/** Public product detail + seller summary. */
+/** Public artisan storefront: profile + active listings. */
+export async function fetchArtisanProfile(uid: string, opts?: { page?: number; pageSize?: number }): Promise<ArtisanProfile> {
+  const params = new URLSearchParams();
+  if (opts?.page) params.set("page", String(opts.page));
+  if (opts?.pageSize) params.set("pageSize", String(opts.pageSize));
+  const qs = params.size > 0 ? `?${params.toString()}` : "";
+  return publicFetch<ArtisanProfile>(`/artisans/${encodeURIComponent(uid)}${qs}`);
+}
+
+/** A short, ranked list of shops for the homepage "featured artisans" row. */
+export async function fetchArtisans(limit = 8): Promise<ArtisanStorefront[]> {
+  const res = await publicFetch<{ artisans: ArtisanStorefront[] }>(
+    `/artisans?limit=${limit}`,
+  );
+  return res.artisans;
+}
+
+export interface ArtisanProfileInput {
+  storeName?: string | null;
+  storeBio?: string | null;
+  storeRegion?: string | null;
+  specialties?: string[];
+}
+
+/** PATCH /artisans/me — the caller updates their public storefront profile. */
+export async function updateArtisanProfile(
+  input: ArtisanProfileInput,
+): Promise<Pick<ArtisanStorefront, "uid" | "name" | "photoUrl" | "storeName" | "storeBio" | "storeRegion" | "specialties">> {
+  const res = await apiFetch<{ user: Pick<ArtisanStorefront, "uid" | "name" | "photoUrl" | "storeName" | "storeBio" | "storeRegion" | "specialties"> }>("/artisans/me", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+  return res.user;
+}
+
+/** Public product detail + artisan summary. */
 export async function fetchProduct(id: string): Promise<ProductDetail> {
   return publicFetch<ProductDetail>(`/products/${encodeURIComponent(id)}`);
 }
@@ -96,15 +165,15 @@ export async function fetchMyBid(productId: string): Promise<Bid | null> {
   return res.bid;
 }
 
-/** Seller-only: all active bids with buyer info. */
-export async function fetchSellerBids(productId: string): Promise<SellerBidRow[]> {
-  const res = await apiFetch<{ bids: SellerBidRow[] }>(
+/** Artisan-only: all active bids with buyer info. */
+export async function fetchArtisanBids(productId: string): Promise<ArtisanBidRow[]> {
+  const res = await apiFetch<{ bids: ArtisanBidRow[] }>(
     `/products/${encodeURIComponent(productId)}/bids/all`,
   );
   return res.bids;
 }
 
-/** Seller accepts a bid; product is reserved and checkout info is returned. */
+/** Artisan accepts a bid; product is reserved and checkout info is returned. */
 export async function acceptBid(bidId: string): Promise<{ product: Product; checkout: CheckoutInfo }> {
   return apiFetch<{ product: Product; checkout: CheckoutInfo }>(`/bids/${encodeURIComponent(bidId)}/accept`, {
     method: "POST",
@@ -133,7 +202,7 @@ export async function reserveProduct(productId: string): Promise<{ product: Prod
   );
 }
 
-/** The seller's own listings (all statuses). */
+/** The artisan's own listings (all statuses). */
 export async function fetchMyListings(): Promise<Product[]> {
   const res = await apiFetch<{ products: Product[] }>("/products/mine");
   return res.products;

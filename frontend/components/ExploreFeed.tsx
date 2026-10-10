@@ -22,9 +22,11 @@ import {
   type FeedSortBy,
   type Product,
   type ProductFeed,
+  type ProductType,
 } from "@/types";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ProductCardSkeleton } from "@/components/ui/Skeleton";
+import { cn } from "@/lib/cn";
 
 const selectClass = "field h-10 rounded-full px-4";
 
@@ -98,6 +100,7 @@ export function ExploreFeed({
           priceMin: toNumber(filters.priceMin),
           priceMax: toNumber(filters.priceMax),
           sortBy: filters.sortBy,
+          productType: filters.productType || undefined,
           page: 1,
         });
         if (cancelled) return;
@@ -131,6 +134,7 @@ export function ExploreFeed({
         priceMin: toNumber(filters.priceMin),
         priceMax: toNumber(filters.priceMax),
         sortBy: filters.sortBy,
+        productType: filters.productType || undefined,
         page: nextPage,
       });
       setProducts((prev) => [...prev, ...feed.products]);
@@ -158,8 +162,8 @@ export function ExploreFeed({
   return (
     <div className="container-page py-8 sm:py-12">
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="mr-auto text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-          Explore
+        <h1 className="heading mr-auto text-2xl text-foreground sm:text-3xl">
+          Discover handmade treasures
         </h1>
         <div className="relative">
           <svg
@@ -179,8 +183,8 @@ export function ExploreFeed({
             type="search"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search items..."
-            aria-label="Search items"
+            placeholder="Search pieces..."
+            aria-label="Search pieces"
             className="field h-10 w-56 rounded-full pl-10 sm:w-64"
           />
         </div>
@@ -215,6 +219,15 @@ export function ExploreFeed({
               {s.label}
             </option>
           ))}
+        </select>
+        <select
+          value={filters.productType}
+          onChange={(e) => set("productType", e.target.value as ProductType | "")}
+          className={selectClass}
+        >
+          <option value="">All</option>
+          <option value="made_to_order">Made to order</option>
+          <option value="ready_to_ship">Ready to ship</option>
         </select>
         <label className="flex h-10 cursor-pointer items-center gap-2 rounded-full border border-border bg-surface px-4 text-sm font-medium text-secondary transition-colors hover:bg-surface-muted">
           <input
@@ -274,11 +287,11 @@ export function ExploreFeed({
         <div className="mt-8">
           <EmptyState
             icon="search"
-            title={activeCount > 0 ? "Nothing matches those filters" : "No products yet"}
+            title={activeCount > 0 ? "Nothing matches those filters" : "No pieces yet"}
             description={
               activeCount > 0
                 ? "Try different keywords, widen the price range or turn off a filter."
-                : "Be the first to list something — it takes under a minute."
+                : "Be the first artisan to share a handmade piece — it's free and takes under a minute."
             }
           >
             {activeCount > 0 ? (
@@ -291,7 +304,7 @@ export function ExploreFeed({
               </button>
             ) : (
               <Link href="/sell/new" className="btn btn-primary">
-                List an item
+                Sell your craft
               </Link>
             )}
           </EmptyState>
@@ -324,12 +337,14 @@ export function ExploreFeed({
 export function ProductCard({ product }: { product: Product }) {
   const cover = product.images[0];
 
+  const avail = availabilityMeta(product);
+
   return (
     <Link
       href={`/product/${product.id}`}
       className="card-interactive group flex flex-col overflow-hidden"
     >
-      <div className="relative aspect-square w-full overflow-hidden bg-surface-muted">
+      <div className="relative aspect-[5/4] w-full overflow-hidden bg-surface-muted">
         {cover ? (
           <Image
             src={mediaUrl(cover)}
@@ -345,18 +360,37 @@ export function ProductCard({ product }: { product: Product }) {
         )}
         <div className="absolute left-3 top-3 flex gap-2">
           {product.isBiddingEnabled && <span className="badge badge-info bg-white/90">Bidding</span>}
-          {product.isNegotiable && (
-            <span className="badge badge-neutral bg-white/90">Negotiable</span>
-          )}
+          {avail && <span className={cn("badge", avail.cls, "bg-white/95")}>{avail.label}</span>}
         </div>
       </div>
       <div className="flex flex-1 flex-col gap-1 p-4">
-        <p className="line-clamp-1 text-base font-medium text-foreground">{product.title}</p>
+        <p className="line-clamp-2 text-base font-medium text-foreground">{product.title}</p>
         <p className="text-lg font-semibold text-foreground">
           {formatPrice(product.priceAmount, product.priceCurrency)}
         </p>
-        <p className="mt-auto text-xs text-muted">{product.conditionNote || product.category}</p>
+        <p className="mt-auto text-xs text-muted">{product.category}</p>
       </div>
     </Link>
   );
+}
+
+/** Availability language for the feed cards: availability first, craft second. */
+export function availabilityMeta(product: Product): { label: string; cls: string } | null {
+  if (product.status !== "active") return null;
+  if (product.isBiddingEnabled) return null;
+  if (product.productType === "made_to_order") {
+    const cap = product.maxConcurrentOrders ?? null;
+    const fullyBooked =
+      product.acceptingOrders === false ||
+      (cap !== null && (product.currentOpenOrders ?? 0) >= cap);
+    return fullyBooked
+      ? { label: "Fully booked", cls: "badge-neutral" }
+      : { label: "Open for orders", cls: "badge-secondary" };
+  }
+  if (product.productType === "ready_to_ship") {
+    return (product.quantityAvailable ?? 0) > 0
+      ? { label: "In stock", cls: "badge-secondary" }
+      : { label: "Sold out", cls: "badge-neutral" };
+  }
+  return null;
 }

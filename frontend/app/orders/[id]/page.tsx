@@ -13,9 +13,14 @@ import {
   fetchOrder,
   fetchOrderMessages,
   markOrderMessagesRead,
+  markOrderReady,
+  payFinal,
+  requestCancellation,
+  respondCancellation,
   sendOrderMessage,
 } from "@/lib/orders";
-import type { CanConfirmResponse, Message, Order, OrderDetail } from "@/types";
+import { fetchProduct } from "@/lib/products";
+import type { CanConfirmResponse, Message, Order, OrderDetail, Product, ProductionStatus } from "@/types";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/Toast";
 import { StepTracker } from "@/components/ui/StepTracker";
@@ -29,6 +34,18 @@ const STATUS_BADGE: Record<Order["escrowStatus"], { label: string; cls: string }
   refunded: { label: "Refunded", cls: "badge-neutral" },
   refund_requested: { label: "Refund requested", cls: "badge-warning" },
   failed: { label: "Payment failed", cls: "badge-danger" },
+};
+
+const PROD_BADGE: Record<ProductionStatus, { label: string; cls: string }> = {
+  pending_deposit: { label: "Pending deposit", cls: "badge-warning" },
+  in_production: { label: "In production", cls: "badge-info" },
+  ready_for_delivery: { label: "Ready for delivery", cls: "badge-success" },
+  awaiting_final_payment: { label: "Awaiting final payment", cls: "badge-warning" },
+  awaiting_delivery: { label: "Awaiting delivery", cls: "badge-success" },
+  cancelled_by_mutual_agreement: { label: "Cancelled (mutual)", cls: "badge-neutral" },
+  cancelled_forfeited: { label: "Cancelled — deposit forfeited", cls: "badge-danger" },
+  released: { label: "Completed", cls: "badge-success" },
+  refunded: { label: "Refunded", cls: "badge-neutral" },
 };
 
 function useCountdown(deadline: string): string {
@@ -69,6 +86,10 @@ function formatTime(iso: string): string {
   });
 }
 
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 export default function OrderPage({ params }: { params: Promise<{ id: string }> }) {
   return <OrderBody idPromise={params} />;
 }
@@ -78,6 +99,7 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [detail, setDetail] = useState<OrderDetail | null>(null);
+  const [fullProduct, setFullProduct] = useState<Product | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -93,6 +115,10 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
   const [confirmStep, setConfirmStep] = useState<"idle" | "question" | "received" | "problem">("idle");
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState("");
+
+  // Made-to-order actions.
+  const [showCancelForm, setShowCancelForm] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -120,6 +146,13 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
         setCanConfirm(await fetchCanConfirm(orderId));
       } else {
         setCanConfirm(null);
+      }
+      // Full product (customization questions, production time) for the brief.
+      try {
+        const pd = await fetchProduct(data.order.productId);
+        setFullProduct(pd.product);
+      } catch {
+        setFullProduct(null);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load order");
@@ -203,7 +236,7 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
         toast({
           title: released ? "Escrow released" : "Delivery confirmed",
           description: released
-            ? "Funds have been released to the seller."
+            ? "Funds have been released to the artisan."
             : "Thanks — we're waiting on the other party's confirmation and feedback too.",
         });
       }
@@ -218,13 +251,103 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
     }
   };
 
+  const handleMarkReady = async () => {
+    if (!orderId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await markOrderReady(orderId);
+      toast({
+        title: "Marked as ready",
+        description:
+          detail?.order.paymentPlan === "deposit"
+            ? "The customer can now pay the remaining balance."
+            : "The delivery window has started — confirm once it's delivered.",
+      });
+      await loadOrder();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to mark the order ready");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePayFinal = async () => {
+    if (!orderId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await payFinal(orderId);
+      if (res.redirectUrl) {
+        window.location.assign(res.redirectUrl);
+        return;
+      }
+      toast({
+        title: "Payment started",
+        description: "Approve the payment request on your phone to finish.",
+      });
+      await loadOrder();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start the remaining payment");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRequestCancellation = async () => {
+    if (!orderId || busy) return;
+    if (cancelReason.trim().length < 1) {
+      setError("Please explain why you'd like to cancel.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await requestCancellation(orderId, cancelReason.trim());
+      setShowCancelForm(false);
+      setCancelReason("");
+      toast({
+        title: "Cancellation requested",
+        description:
+          "The artisan will accept or reject it. If accepted, they keep 25% of the order total and you're refunded the rest.",
+        variant: "info",
+      });
+      await loadOrder();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to request cancellation");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRespondCancellation = async (accept: boolean) => {
+    if (!orderId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await respondCancellation(orderId, accept);
+      toast({
+        title: accept ? "Cancellation accepted" : "Cancellation declined",
+        description: accept
+          ? "You keep 25% of the order total; the customer is refunded the rest and the piece goes back on sale."
+          : "Production continues as planned.",
+        variant: accept ? "info" : "success",
+      });
+      await loadOrder();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to respond to the cancellation request");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!user) {
     return (
       <div className="container-page py-16">
         <EmptyState
           icon="inbox"
           title="Sign in to view this order"
-          description="You need to be signed in as the buyer or seller to see this order."
+          description="You need to be signed in as the customer or artisan to see this order."
         >
           <Link href="/" className="btn btn-primary">
             Sign in
@@ -247,18 +370,30 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
     );
   }
 
-  const { order, product, buyer, seller } = detail;
+  const { order, product, buyer, artisan } = detail;
+  // Order carries the listing kind at purchase time; the detail's `product` is
+  // a reduced summary shape without productType.
+  const isRTS = order.productType === "ready_to_ship";
   const meta = STATUS_BADGE[order.escrowStatus];
   const isBuyer = user.uid === order.buyerId;
-  const isSeller = user.uid === order.sellerId;
+  const isArtisan = user.uid === order.artisanId;
   const hasDispute = order.hasDispute === true;
-  const otherParty = isBuyer ? seller : buyer;
-  const counterpartRole = isBuyer ? "seller" : "buyer";
-  const myFeedback = isBuyer ? order.buyerFeedback : order.sellerFeedback;
-  const feedbackAboutMe = isBuyer ? order.sellerFeedback : order.buyerFeedback;
+  const otherParty = isBuyer ? artisan : buyer;
+  const counterpartRole = isBuyer ? "artisan" : "customer";
+  const myFeedback = isBuyer ? order.buyerFeedback : order.artisanFeedback;
+  const feedbackAboutMe = isBuyer ? order.artisanFeedback : order.buyerFeedback;
   const showConfirmUi =
-    (isBuyer || isSeller) && order.escrowStatus === "held" && !hasDispute;
+    (isBuyer || isArtisan) && order.escrowStatus === "held" && !hasDispute;
   const canConfirmNow = showConfirmUi && canConfirm?.allowed === true && !busy;
+  const briefOptions = order.customizationResponses ?? [];
+  const optionById = new Map(
+    (fullProduct?.customizationOptions ?? []).map((o) => [o.id, o]),
+  );
+  const hasOrderBrief =
+    briefOptions.length > 0 ||
+    Boolean(order.referenceImageUrl) ||
+    Boolean(order.customRequestNote);
+  const cancellationPending = order.cancellationRequest?.artisanDecision === "pending";
 
   return (
     <div className="container-page max-w-2xl py-10 sm:py-14">
@@ -269,6 +404,11 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn("badge", meta.cls)}>{meta.label}</span>
+            {order.productionStatus && (
+              <span className={cn("badge", PROD_BADGE[order.productionStatus].cls)}>
+                {PROD_BADGE[order.productionStatus].label}
+              </span>
+            )}
             {hasDispute && <span className="badge badge-danger">Under review</span>}
           </div>
           {order.escrowStatus === "held" && !hasDispute && (
@@ -318,7 +458,7 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
                 {product.title}
               </Link>
               <p className="mt-0.5 text-xs text-muted">
-                Sold by {seller.name} · Bought by {buyer.name}
+                Sold by {artisan.name} · Purchased by {buyer.name}
               </p>
             </div>
           </div>
@@ -339,9 +479,219 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
             <dt className="font-medium text-foreground">Total paid</dt>
             <dd className="font-semibold text-foreground">{formatPrice(order.totalPaid, order.currency)}</dd>
           </div>
-        </dl>
+            {order.paymentPlan === "deposit" && (
+              <>
+                <div className="flex justify-between">
+                  <dt className="text-secondary">{order.depositAmount > 0 ? "Deposit (50%)" : "Deposit"}</dt>
+                  <dd className="font-medium text-foreground">
+                    {formatPrice(order.depositAmount, order.currency)}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-secondary">
+                    {order.finalPaid ? "Remaining balance — paid" : "Remaining balance"}
+                  </dt>
+                  <dd className="font-medium text-foreground">
+                    {formatPrice(order.finalAmount, order.currency)}
+                  </dd>
+                </div>
+              </>
+            )}
+          </dl>
 
-        {(isBuyer || isSeller) && (
+        {hasOrderBrief && (
+          <div className="mt-6 rounded-xl border border-border bg-background p-4 text-sm">
+            <p className="font-medium text-foreground">Order brief</p>
+            {briefOptions.length > 0 && (
+              <dl className="mt-3 space-y-2">
+                {briefOptions.map((resp) => {
+                  const opt = optionById.get(resp.optionId);
+                  const isImage = opt?.type === "image_upload";
+                  return (
+                    <div key={resp.optionId} className="flex justify-between gap-4">
+                      <dt className="text-secondary">{opt?.label ?? "Customization"}</dt>
+                      <dd className="text-right font-medium text-foreground">
+                        {isImage ? (
+                          <Image
+                            src={mediaUrl(resp.value)}
+                            alt={opt?.label ?? "Reference"}
+                            width={64}
+                            height={64}
+                            className="ml-auto size-16 rounded-lg object-cover"
+                          />
+                        ) : (
+                          <span className="whitespace-pre-wrap">{resp.value}</span>
+                        )}
+                      </dd>
+                    </div>
+                  );
+                })}
+              </dl>
+            )}
+            {order.referenceImageUrl && (
+              <div className="mt-3">
+                <p className="text-xs font-medium text-secondary">Reference image</p>
+                <Image
+                  src={mediaUrl(order.referenceImageUrl)}
+                  alt="Reference"
+                  width={160}
+                  height={160}
+                  className="mt-1.5 h-32 w-32 rounded-lg object-cover"
+                />
+              </div>
+            )}
+            {order.customRequestNote && (
+              <div className="mt-3">
+                <p className="text-xs font-medium text-secondary">Your notes</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-5 text-foreground">
+                  {order.customRequestNote}
+                </p>
+              </div>
+            )}
+            {fullProduct?.productionTimeDays != null && fullProduct.productionTimeDays > 0 && (
+              <p className="mt-3 border-t border-border pt-3 text-xs text-muted">
+                Production estimate · ~{fullProduct.productionTimeDays} days
+              </p>
+            )}
+          </div>
+        )}
+
+        {(isArtisan &&
+          !isRTS &&
+          order.productionStatus === "in_production" && !hasDispute && (
+          <div className="mt-6 rounded-xl border border-border bg-background p-4 text-sm">
+            <p className="font-medium text-foreground">Piece finished?</p>
+            <p className="mt-1 text-xs leading-5 text-secondary">
+              Mark it as ready so{" "}
+              {order.paymentPlan === "deposit"
+                ? "the customer can pay the remaining balance and the delivery window starts."
+                : "the delivery window starts — confirm once you deliver it."}
+            </p>
+            <button
+              type="button"
+              onClick={handleMarkReady}
+              disabled={busy}
+              className="btn btn-primary mt-3"
+            >
+              {busy ? "Working..." : "Mark as ready"}
+            </button>
+          </div>
+        )) ||
+(isBuyer &&
+          !isRTS &&
+          order.productionStatus === "awaiting_final_payment" && !hasDispute && (
+          <div className="mt-6 rounded-xl border border-border bg-background p-4 text-sm">
+            <p className="font-medium text-foreground">Your piece is ready</p>
+            <p className="mt-1 text-xs leading-5 text-secondary">
+              {artisan.name} finished your order. Pay the remaining balance to start delivery; if
+              it isn&apos;t paid within 3 days the order is cancelled and the deposit goes to the
+              artisan.
+            </p>
+            <button
+              type="button"
+              onClick={handlePayFinal}
+              disabled={busy}
+              className="btn btn-primary mt-3"
+            >
+              {busy
+                ? "Working..."
+                : `Pay remaining ${formatPrice(order.finalAmount, order.currency)}`}
+            </button>
+          </div>
+        )) ||
+        (isArtisan && cancellationPending && !hasDispute && (
+          <div className="mt-6 rounded-xl border border-border bg-background p-4 text-sm">
+            <p className="font-medium text-foreground">Cancellation request from {buyer.name}</p>
+            <p className="mt-1 whitespace-pre-wrap rounded-lg bg-surface p-3 text-xs leading-5 text-secondary">
+              &ldquo;{order.cancellationRequest!.reason}&rdquo;
+            </p>
+            <p className="mt-2 text-xs leading-5 text-secondary">
+              If you accept, you keep 25% of the order total (
+              {formatPrice(round2(order.totalPaid * 0.25), order.currency)}) for the work done and
+              the customer is refunded the rest. If you reject, production continues.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => handleRespondCancellation(true)}
+                disabled={busy}
+                className="btn btn-danger"
+              >
+                Accept cancellation
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRespondCancellation(false)}
+                disabled={busy}
+                className="btn btn-secondary"
+              >
+                Reject — keep making it
+              </button>
+            </div>
+          </div>
+        )) ||
+        (isBuyer &&
+          !isRTS &&
+          order.productionStatus === "in_production" &&
+          !hasDispute &&
+          !order.cancellationRequest && (
+            <div className="mt-6 rounded-xl border border-border bg-background p-4 text-sm">
+              <p className="font-medium text-foreground">Changed your mind?</p>
+              <p className="mt-1 text-xs leading-5 text-secondary">
+                You can ask {artisan.name} to cancel while the piece is still in production. If they
+                accept, they keep 25% of the order total for work done and you&apos;re refunded the
+                rest.
+              </p>
+              {showCancelForm ? (
+                <div className="mt-3 space-y-2">
+                  <textarea
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    rows={2}
+                    maxLength={1000}
+                    placeholder="Why would you like to cancel? (required)"
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted focus:border-danger"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleRequestCancellation}
+                      disabled={busy || cancelReason.trim().length === 0}
+                      className="btn btn-danger"
+                    >
+                      {busy ? "Requesting..." : "Request cancellation"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCancelForm(false);
+                        setCancelReason("");
+                      }}
+                      className="btn btn-secondary"
+                    >
+                      Back
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowCancelForm(true)}
+                  className="btn btn-danger-ghost mt-3"
+                >
+                  Request cancellation
+                </button>
+              )}
+            </div>
+          )) ||
+        (isBuyer && cancellationPending && (
+          <p className="mt-6 rounded-xl border border-border bg-background p-3 text-xs text-secondary">
+            Your cancellation request is with {artisan.name} — you&apos;ll be notified when they
+            accept or reject it.
+          </p>
+        ))}
+
+        {(isBuyer || isArtisan) && (
           <div className="mt-6 rounded-xl border border-border bg-background p-4 text-sm">
             <div className="flex items-center justify-between gap-2">
               <p className="font-medium text-foreground">Delivery confirmation</p>
@@ -457,8 +807,8 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
                 {!canConfirmNow && !canConfirm?.reason && confirmStep === "idle" && (
                   <p className="mt-2 text-xs leading-5 text-secondary">
                     {isBuyer
-                      ? `You have confirmed receipt${myFeedback ? ` and rated the seller ${myFeedback.rating}/5` : ""}.`
-                      : `You have confirmed delivery${myFeedback ? ` and rated the buyer ${myFeedback.rating}/5` : ""}.`}
+                      ? `You have confirmed receipt${myFeedback ? ` and rated the artisan ${myFeedback.rating}/5` : ""}.`
+                      : `You have confirmed delivery${myFeedback ? ` and rated the customer ${myFeedback.rating}/5` : ""}.`}
                     {canConfirm?.otherConfirmed
                       ? " The other party has confirmed too."
                       : " Waiting for the other party to confirm and rate."}
@@ -477,7 +827,7 @@ function OrderBody({ idPromise }: { idPromise: Promise<{ id: string }> }) {
               <div className="mt-3 flex items-center gap-2 text-xs text-secondary">
                 <RatingBadge avgRating={feedbackAboutMe.rating} ratingCount={1} />
                 <span>
-                  {counterpartRole === "seller" ? "The seller" : "The buyer"} rated you {feedbackAboutMe.rating}/5
+                  {counterpartRole === "artisan" ? "The artisan" : "The customer"} rated you {feedbackAboutMe.rating}/5
                 </span>
               </div>
             )}

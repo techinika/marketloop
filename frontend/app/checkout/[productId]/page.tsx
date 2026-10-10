@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import type { User as FirebaseUser } from "firebase/auth";
@@ -9,10 +9,15 @@ import { formatPrice, mediaUrl } from "@/lib/api";
 import { observeAuthState } from "@/lib/firebase";
 import { createOrder, fetchOrder } from "@/lib/orders";
 import { fetchProduct } from "@/lib/products";
-import type { Currency, Order, ProductDetail } from "@/types";
+import { prepareImageFile, presignUploads, uploadToPresignedUrl } from "@/lib/upload";
+import type { Currency, Order, PaymentPlan, ProductDetail } from "@/types";
 import { cn } from "@/lib/cn";
 
 const PHONE_RE = /^\+?\d{9,15}$/;
+
+function answerValue(optionId: string, responses: Record<string, string>): string {
+  return responses[optionId] ?? "";
+}
 
 type Phase = "start" | "awaiting" | "success" | "failed";
 
@@ -79,6 +84,21 @@ function CheckoutBody({
   const [phase, setPhase] = useState<Phase>("start");
   const [error, setError] = useState<string | null>(null);
 
+  // Made-to-order options.
+  const [paymentPlan, setPaymentPlan] = useState<PaymentPlan>("full");
+  const [responses, setResponses] = useState<Record<string, string>>({});
+  const [imageResponseFiles, setImageResponseFiles] = useState<Record<string, File | null>>({});
+  const [refImageFile, setRefImageFile] = useState<File | null>(null);
+  const [requestNote, setRequestNote] = useState("");
+  const preparedRefKeyRef = useRef<string | null>(null);
+
+  // Total added by the buyer's current customization answers, for the preview.
+  const customTotal = (detail?.product.customizationOptions ?? []).reduce((sum, opt) => {
+    const v = answerValue(opt.id, responses);
+    const answered = v.trim().length > 0 || Boolean(imageResponseFiles[opt.id]);
+    return sum + (answered ? (opt.priceAdjustment ?? 0) : 0);
+  }, 0);
+
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
@@ -144,19 +164,100 @@ function CheckoutBody({
   }, [phase, order]);
 
   const isRWF = (detail?.product.priceCurrency ?? queryCurrency ?? "RWF") === "RWF";
+  const isRTS = detail?.product.productType === "ready_to_ship";
 
   const startPayment = async () => {
-    if (!user || !productId) return;
+    if (!user || !productId || !product) return;
+    if (isRTS) {
+      // Ready-to-ship: full pay only, no phone, no customization questions.
+      setPaymentPlan("full");
+      setResponses({});
+      setError(null);
+      try {
+        const result = await createOrder(productId, {
+          quantity: 1,
+          paymentPlan: "full",
+          customizationResponses: [],
+          referenceImageUrl: undefined,
+          customRequestNote: undefined,
+        });
+        setOrder(result.order);
+        if (result.redirectUrl) {
+          window.location.assign(result.redirectUrl);
+          return;
+        }
+        setPhase("awaiting");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to start payment");
+      }
+      return;
+    }
     if (isRWF && !PHONE_RE.test(phone.trim())) {
       setError("Enter a valid MTN MoMo / Airtel number, e.g. 0788123456");
       return;
     }
+    // Client-side required-answer check mirrors the worker's validation.
+    const options = product.customizationOptions ?? [];
+    const missing = options.find(
+      (opt) => opt.required && !answerValue(opt.id, responses) && !imageResponseFiles[opt.id],
+    );
+    if (missing) {
+      setError(`Please answer the required question: "${missing.label}"`);
+      return;
+    }
     setError(null);
     try {
-      const result = await createOrder(productId, isRWF ? phone.trim() : undefined);
+      const preparedImageKeys: Record<string, string> = {};
+      // Upload reference + image-answer files first so their media keys become
+      // the response values / referenceImageUrl.
+      const uploadTasks: Array<{ keyResult: (key: string) => void; file: File }> = [];
+      if (refImageFile) {
+        uploadTasks.push({
+          file: refImageFile,
+          keyResult: (key) => {
+            preparedRefKeyRef.current = key;
+          },
+        });
+      }
+      for (const opt of options) {
+        const file = imageResponseFiles[opt.id];
+        if (file) {
+          uploadTasks.push({
+            file,
+            keyResult: (key) => {
+              preparedImageKeys[opt.id] = key;
+            },
+          });
+        }
+      }
+      if (uploadTasks.length > 0) {
+        const prepared = await Promise.all(uploadTasks.map((t) => prepareImageFile(t.file)));
+        const uploads = await presignUploads(prepared);
+        for (let i = 0; i < uploads.length; i++) {
+          await uploadToPresignedUrl(uploads[i]!, prepared[i]!);
+          uploadTasks[i]!.keyResult(uploads[i]!.key);
+        }
+      }
+      const customizationResponses = options
+        .filter((opt) => {
+          const v = answerValue(opt.id, responses);
+          return v.trim().length > 0 || imageResponseFiles[opt.id];
+        })
+        .map((opt) => ({
+          optionId: opt.id,
+          value: preparedImageKeys[opt.id] ?? answerValue(opt.id, responses).trim(),
+        }));
+
+      const result = await createOrder(productId, {
+        ...(isRWF ? { phoneNumber: phone.trim() } : {}),
+        paymentPlan,
+        customizationResponses,
+        referenceImageUrl: preparedRefKeyRef.current ?? undefined,
+        customRequestNote: requestNote.trim() || undefined,
+      });
       setOrder(result.order);
       if (result.redirectUrl) {
-        window.location.href = result.redirectUrl;
+        window.location.assign(result.redirectUrl);
         return;
       }
       setPhase("awaiting");
@@ -172,18 +273,22 @@ function CheckoutBody({
   };
 
   const product = detail?.product;
-  const agreedAmount =
+  const baseAgreed =
     order?.agreedAmount ??
     queryAmount ??
     product?.reservedAmount ??
     product?.priceAmount ??
     0;
+  // Before the order exists, preview the price including the buyer's
+  // customization answers; once paid the order's own numbers take over.
+  const previewAgreed = baseAgreed + customTotal;
   const deliveryFee = order?.deliveryFee ?? product?.deliveryFee ?? 0;
   const currency =
     order?.currency ??
     (product?.reservedCurrency ?? product?.priceCurrency ?? queryCurrency) ??
     "RWF";
-  const totalPaid = order?.totalPaid ?? agreedAmount + deliveryFee;
+  const totalPaid = order?.totalPaid ?? previewAgreed + deliveryFee;
+  const payableNow = paymentPlan === "deposit" ? totalPaid / 2 : totalPaid;
 
   return (
     <div className="container-page flex justify-center py-10 sm:py-16">
@@ -220,7 +325,9 @@ function CheckoutBody({
             </h1>
             <p className="mt-3 text-sm leading-6 text-secondary">
               {phase === "success"
-                ? `The seller keeps ${formatPrice(agreedAmount, currency)} in escrow until delivery is confirmed. You can confirm delivery from your order page.`
+                ? order?.paymentPlan === "deposit"
+                  ? `Your deposit of ${formatPrice(order.depositAmount, currency)} is secured. The artisan will start making your piece, and you'll settle the remaining ${formatPrice(order.finalAmount, currency)} when it's ready.`
+                  : `The artisan keeps ${formatPrice(totalPaid, currency)} in escrow until you confirm delivery.`
                 : "Your payment was not completed. The item is back on the market — you can try again."}
             </p>
             <div className="mt-8 flex flex-col gap-3">
@@ -266,15 +373,28 @@ function CheckoutBody({
                 >
                   {product.title}
                 </Link>
-                <p className="mt-0.5 text-xs text-muted">Reserved for {user.displayName ?? "you"}</p>
+                <p className="mt-0.5 text-xs text-muted">
+                  {isRTS ? "Ready to ship to you" : `Reserved for ${user.displayName ?? "you"}`}
+                </p>
+                {product.productionTimeDays > 0 && (
+                  <p className="mt-0.5 text-xs text-muted">Made to order · ~{product.productionTimeDays} days</p>
+                )}
               </div>
             </div>
 
             <dl className="mt-6 space-y-2 rounded-xl border border-border bg-background p-4 text-sm">
               <div className="flex justify-between">
                 <dt className="text-secondary">Item price</dt>
-                <dd className="font-medium text-foreground">{formatPrice(agreedAmount, currency)}</dd>
+                <dd className="font-medium text-foreground">{formatPrice(previewAgreed, currency)}</dd>
               </div>
+              {!order && customTotal !== 0 && (
+                <div className="flex justify-between">
+                  <dt className="text-secondary">Customization</dt>
+                  <dd className="font-medium text-foreground">
+                    {customTotal > 0 ? "+" : "−"} {formatPrice(Math.abs(customTotal), currency)}
+                  </dd>
+                </div>
+              )}
               <div className="flex justify-between">
                 <dt className="text-secondary">Delivery</dt>
                 <dd className="font-medium text-foreground">
@@ -282,10 +402,163 @@ function CheckoutBody({
                 </dd>
               </div>
               <div className="flex justify-between border-t border-border pt-2">
-                <dt className="font-medium text-foreground">Total</dt>
+                <dt className="font-medium text-foreground">{order ? "Total paid" : "Total"}</dt>
                 <dd className="font-semibold text-foreground">{formatPrice(totalPaid, currency)}</dd>
               </div>
+              {!order && paymentPlan === "deposit" && (
+                <div className="flex justify-between border-t border-border pt-2 text-xs">
+                  <dt className="text-secondary">Payable now (deposit)</dt>
+                  <dd className="font-medium text-foreground">{formatPrice(payableNow, currency)}</dd>
+                </div>
+              )}
             </dl>
+
+            {phase === "start" && product && (
+              <div className="mt-6 flex flex-col gap-4">
+                <div className="flex flex-col gap-2">
+                  <span className="field-label">Payment plan</span>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentPlan("full")}
+                      className={cn(
+                        "rounded-xl border p-3 text-left transition-colors",
+                        paymentPlan === "full"
+                          ? "border-accent bg-accent-soft"
+                          : "border-border bg-background hover:border-accent",
+                      )}
+                    >
+                      <span className="block text-sm font-medium text-foreground">Pay in full</span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        {formatPrice(totalPaid, currency)} today, delivered when ready
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentPlan("deposit")}
+                      className={cn(
+                        "rounded-xl border p-3 text-left transition-colors",
+                        paymentPlan === "deposit"
+                          ? "border-accent bg-accent-soft"
+                          : "border-border bg-background hover:border-accent",
+                      )}
+                    >
+                      <span className="block text-sm font-medium text-foreground">Deposit — 50 / 50</span>
+                      <span className="mt-0.5 block text-xs text-muted">
+                        {formatPrice(totalPaid / 2, currency)} now, {formatPrice(totalPaid / 2, currency)} when the piece is ready
+                      </span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted">
+                    Deposit orders are made first — you settle the remaining balance once the artisan finishes.
+                  </p>
+                </div>
+
+                {product.isCustomizable && product.customizationOptions.length > 0 && (
+                  <div className="rounded-xl border border-border bg-background p-4">
+                    <p className="text-sm font-medium text-foreground">Customize this piece</p>
+                    <p className="mt-0.5 text-xs text-muted">
+                      Your answers are added to the price shown above.
+                    </p>
+                    <div className="mt-4 flex flex-col gap-4">
+                      {product.customizationOptions.map((opt) => (
+                        <div key={opt.id}>
+                          <label className="field-label" htmlFor={`custom-${opt.id}`}>
+                            {opt.label}
+                            {opt.required && <span className="text-danger"> *</span>}
+                          </label>
+                          {opt.type === "choice" && opt.choices ? (
+                            <select
+                              id={`custom-${opt.id}`}
+                              value={answerValue(opt.id, responses)}
+                              onChange={(e) => setResponses((prev) => ({ ...prev, [opt.id]: e.target.value }))}
+                              className="field w-full"
+                            >
+                              <option value="">Choose one</option>
+                              {opt.choices.map((ch) => (
+                                <option key={ch} value={ch}>
+                                  {ch}
+                                </option>
+                              ))}
+                            </select>
+                          ) : opt.type === "image_upload" ? (
+                            <input
+                              id={`custom-${opt.id}`}
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) =>
+                                setImageResponseFiles((prev) => ({
+                                  ...prev,
+                                  [opt.id]: e.target.files?.[0] ?? null,
+                                }))
+                              }
+                              className="field w-full"
+                            />
+                          ) : (
+                            <input
+                              id={`custom-${opt.id}`}
+                              type="text"
+                              value={answerValue(opt.id, responses)}
+                              onChange={(e) => setResponses((prev) => ({ ...prev, [opt.id]: e.target.value }))}
+                              maxLength={1000}
+                              placeholder="Your answer"
+                              className="field w-full"
+                            />
+                          )}
+                          {opt.priceAdjustment !== 0 && (
+                            <p className="mt-1 text-xs text-muted">
+                              {opt.priceAdjustment > 0 ? "+" : "−"}{" "}
+                              {formatPrice(Math.abs(opt.priceAdjustment), currency)}
+                              {opt.required ? "" : " (optional)"}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {product.allowsReferenceUpload && (
+                  <div className="rounded-xl border border-border bg-background p-4">
+                    <p className="text-sm font-medium text-foreground">Reference & notes</p>
+                    <p className="mt-0.5 text-xs text-muted">
+                      Upload a sketch or write what you&apos;re picturing — sizes, colors, materials.
+                    </p>
+                    <div className="mt-3 flex flex-col gap-4">
+                      <div>
+                        <label className="field-label" htmlFor="ref-image">
+                          Reference image (optional)
+                        </label>
+                        <input
+                          id="ref-image"
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => setRefImageFile(e.target.files?.[0] ?? null)}
+                          className="field w-full"
+                        />
+                        {refImageFile && (
+                          <p className="mt-1 truncate text-xs text-muted">{refImageFile.name}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="field-label" htmlFor="request-note">
+                          What do you have in mind? (optional)
+                        </label>
+                        <textarea
+                          id="request-note"
+                          value={requestNote}
+                          onChange={(e) => setRequestNote(e.target.value)}
+                          rows={3}
+                          maxLength={2000}
+                          placeholder="Colors, materials, size, inspiration..."
+                          className="field w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {phase === "awaiting" ? (
               <div className="mt-6">
@@ -326,8 +599,14 @@ function CheckoutBody({
                   onClick={startPayment}
                   className="btn btn-primary mt-4 w-full"
                 >
-                  Pay {formatPrice(totalPaid, currency)}
+                  Pay {formatPrice(payableNow, currency)}
                 </button>
+                {paymentPlan === "deposit" && (
+                  <p className="mt-2 text-center text-xs text-muted">
+                    Deposit of {formatPrice(payableNow, currency)} — the remaining{" "}
+                    {formatPrice(totalPaid - payableNow, currency)} is due when the piece is ready.
+                  </p>
+                )}
               </div>
             ) : (
               <div className="mt-6">
@@ -345,8 +624,14 @@ function CheckoutBody({
                   onClick={startPayment}
                   className="btn btn-primary mt-4 w-full"
                 >
-                  Pay {formatPrice(totalPaid, currency)}
+                  Pay {formatPrice(payableNow, currency)}
                 </button>
+                {paymentPlan === "deposit" && (
+                  <p className="mt-2 text-center text-xs text-muted">
+                    Deposit of {formatPrice(payableNow, currency)} — the remaining{" "}
+                    {formatPrice(totalPaid - payableNow, currency)} is due when the piece is ready.
+                  </p>
+                )}
                 <p className="mt-2 text-center text-xs text-muted">
                   You&apos;ll be redirected to our secure card payment page.
                 </p>

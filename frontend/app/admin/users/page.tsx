@@ -56,7 +56,7 @@ export default function AdminUsersPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Users</h1>
-          <p className="mt-1 text-sm text-muted">Registered buyers and sellers.</p>
+          <p className="mt-1 text-sm text-muted">Registered buyers and artisans.</p>
         </div>
         <Link href="/admin" className="btn btn-secondary">
           Back to overview

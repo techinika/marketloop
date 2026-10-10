@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 
 import { firestoreFromEnv, type QueryFilter, type WithId } from "../lib/firestore";
-import { releaseToSeller } from "../lib/escrow";
+import { releaseToArtisan } from "../lib/escrow";
 import { httpError } from "../lib/http";
+import { adjustMadeToOrderSlots, restoreReadyToShipStock } from "../lib/inventory";
 import { listMessages } from "../lib/messages";
 import { createNotification } from "../lib/notify";
 import { presignUrl } from "../lib/r2-presign";
@@ -77,15 +78,15 @@ adminRoutes.get("/orders", async (c) => {
   });
 
   // Batch-read the referenced users + products once instead of 3 GETs per order.
-  const [buyers, sellers, products] = await Promise.all([
+  const [buyers, artisans, products] = await Promise.all([
     db.getManyDocs<User>([...new Set(orders.map((o) => o.buyerId))].map((id) => `${collections.users}/${id}`)),
-    db.getManyDocs<User>([...new Set(orders.map((o) => o.sellerId))].map((id) => `${collections.users}/${id}`)),
+    db.getManyDocs<User>([...new Set(orders.map((o) => o.artisanId))].map((id) => `${collections.users}/${id}`)),
     db.getManyDocs<Product>([...new Set(orders.map((o) => o.productId))].map((id) => `${collections.products}/${id}`)),
   ]);
 
   const rows = orders.map((order) => {
     const buyer = buyers.get(order.buyerId) ?? null;
-    const seller = sellers.get(order.sellerId) ?? null;
+    const artisan = artisans.get(order.artisanId) ?? null;
     const product = products.get(order.productId) ?? null;
     return {
       id: order.id,
@@ -104,9 +105,9 @@ adminRoutes.get("/orders", async (c) => {
       buyer: buyer
         ? { uid: buyer.uid, name: buyer.name, email: buyer.email }
         : { uid: order.buyerId, name: "Unknown", email: null },
-      seller: seller
-        ? { uid: seller.uid, name: seller.name, email: seller.email }
-        : { uid: order.sellerId, name: "Unknown", email: null },
+      artisan: artisan
+        ? { uid: artisan.uid, name: artisan.name, email: artisan.email }
+        : { uid: order.artisanId, name: "Unknown", email: null },
       product: product
         ? { id: product.id, title: product.title }
         : { id: order.productId, title: "Unknown" },
@@ -131,17 +132,17 @@ adminRoutes.get("/orders/:id", async (c) => {
   const order = await db.getDoc<Order>(`${collections.orders}/${id}`);
   if (!order) return httpError(c, 404, "Order not found");
 
-  const [product, buyer, seller, transactions, thread] = await Promise.all([
+  const [product, buyer, artisan, transactions, thread] = await Promise.all([
     db.getDoc<Product>(`${collections.products}/${order.productId}`),
     db.getDoc<User>(`${collections.users}/${order.buyerId}`),
-    db.getDoc<User>(`${collections.users}/${order.sellerId}`),
+    db.getDoc<User>(`${collections.users}/${order.artisanId}`),
     db.queryCollection<WalletTransaction>(collections.walletTransactions, {
       filters: [{ field: "orderId", op: "==", value: order.id }],
     }),
     listMessages(c.env, order.id, { limit: 200 }),
   ]);
 
-  return c.json({ order, product, buyer, seller, transactions, messages: thread.messages });
+  return c.json({ order, product, buyer, artisan, transactions, messages: thread.messages });
 });
 
 /**
@@ -173,6 +174,9 @@ adminRoutes.post("/orders/:id/mark-refunded", async (c) => {
       { field: "type", op: "==", value: "refund" },
     ],
   });
+  // Partial refunds (cancellation split) record the real amount up front;
+  // legacy orders fall back to the full total.
+  const refundedAmount = existingRefunds[0]?.amount ?? order.totalPaid;
   if (existingRefunds.length === 0) {
     await db.createDoc<WalletTransaction>(collections.walletTransactions, undefined, {
       userId: order.buyerId,
@@ -184,14 +188,21 @@ adminRoutes.post("/orders/:id/mark-refunded", async (c) => {
     });
   }
 
-  const product = await db.getDoc<Product>(`${collections.products}/${order.productId}`);
-  if (product && product.status === "sold" && product.sellerId === order.sellerId) {
-    await db.updateDoc<Product>(`${collections.products}/${order.productId}`, {
-      status: "active",
-      reservedBy: null,
-      reservedUntil: null,
-      updatedAt: now,
-    });
+  if (order.productType === "ready_to_ship") {
+    // Return the bought units to stock so the item is sellable again.
+    await restoreReadyToShipStock(c.env, order.productId, order.quantity ?? 1);
+  } else {
+    const product = await db.getDoc<Product>(`${collections.products}/${order.productId}`);
+    if (product && product.status === "sold" && product.artisanId === order.artisanId) {
+      await db.updateDoc<Product>(`${collections.products}/${order.productId}`, {
+        status: "active",
+        reservedBy: null,
+        reservedUntil: null,
+        updatedAt: now,
+      });
+    }
+    // The refunded made-to-order frees a production slot.
+    await adjustMadeToOrderSlots(c.env, order.productId, -1);
   }
 
   const updated = await db.updateDoc<Order>(`${collections.orders}/${order.id}`, {
@@ -208,7 +219,7 @@ adminRoutes.post("/orders/:id/mark-refunded", async (c) => {
     order.buyerId,
     "order_refunded",
     "Refund completed",
-    `Your refund of ${order.totalPaid} ${order.currency} for order ${order.id} was completed by the payment provider.`,
+    `Your refund of ${refundedAmount} ${order.currency} for order ${order.id} was completed by the payment provider.`,
     { orderId: order.id, productId: order.productId },
   );
 
@@ -216,7 +227,7 @@ adminRoutes.post("/orders/:id/mark-refunded", async (c) => {
 });
 
 /**
- * POST /admin/orders/:id/force-release — releases held funds to the seller
+ * POST /admin/orders/:id/force-release — releases held funds to the artisan
  * wallet without both-party confirmation (admin verified delivery). Requires
  * an adminNote explaining why.
  */
@@ -235,19 +246,22 @@ adminRoutes.post("/orders/:id/force-release", async (c) => {
   if (order.escrowStatus !== "held") {
     return httpError(c, 409, "Only held orders can be force-released");
   }
+  if (order.finalAmount > 0 && order.finalPaid !== true) {
+    return httpError(c, 409, "The remaining payment for this order hasn't been received yet");
+  }
 
   const now = new Date().toISOString();
-  // releaseToSeller atomically flips held -> released, credits the wallet and
+  // releaseToArtisan atomically flips held -> released, credits the wallet and
   // writes the transaction. It returns false when the order left "held" under
   // us (concurrent release/refund), so never credit twice.
-  const released = await releaseToSeller(c.env, order);
+  const released = await releaseToArtisan(c.env, order);
   if (!released) {
     return httpError(c, 409, "Order is no longer held in escrow");
   }
 
-  const updated = await db.updateDoc<Order>(`${collections.orders}/${order.id}`, {
+  const newRelease = await db.updateDoc<Order>(`${collections.orders}/${order.id}`, {
     buyerConfirmedDelivery: true,
-    sellerConfirmedDelivery: true,
+    artisanConfirmedDelivery: true,
     adminAction: "force-release",
     adminNote,
     adminUid: c.get("adminUser").uid,
@@ -255,7 +269,11 @@ adminRoutes.post("/orders/:id/force-release", async (c) => {
     updatedAt: now,
   });
 
-  return c.json({ order: updated });
+  if (order.productType !== "ready_to_ship") {
+    await adjustMadeToOrderSlots(c.env, order.productId, -1);
+  }
+
+  return c.json({ order: newRelease });
 });
 
 /** GET /admin/users — paginated user list with wallet + listing/order counts. */
@@ -283,7 +301,7 @@ adminRoutes.get("/users", async (c) => {
     slice.map(async (user) => {
       const [products, orders] = await Promise.all([
         db.queryCollection<Product>(collections.products, {
-          filters: [{ field: "sellerId", op: "==", value: user.uid }],
+          filters: [{ field: "artisanId", op: "==", value: user.uid }],
         }),
         db.queryCollection<Order>(collections.orders, {
           filters: [{ field: "buyerId", op: "==", value: user.uid }],

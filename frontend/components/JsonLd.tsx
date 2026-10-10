@@ -1,0 +1,13 @@
+/** Renders a JSON-LD `<script>` block for search-engine rich results. */
+export function JsonLd({
+  data,
+}: {
+  data: Record<string, unknown> | Array<Record<string, unknown>>;
+}) {
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
+    />
+  );
+}

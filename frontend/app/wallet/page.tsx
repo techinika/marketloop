@@ -157,7 +157,7 @@ export default function WalletPage() {
               {primaryCurrency === "USD" && data.walletBalance > 0 ? (
                 <p className="mt-2 text-xs leading-5 text-muted">
                   USD withdrawals aren&apos;t self-serve yet. Email{" "}
-                  <span className="font-medium text-accent-strong">support@allsha.rw</span> and our team will
+                  <span className="font-medium text-accent-strong">hello@handi.rw</span> and our team will
                   process it.
                 </p>
               ) : (

@@ -1,4 +1,4 @@
-name = "allsha-workers"
+name = "handi-workers"
 main = "src/index.ts"
 compatibility_date = "2026-08-13"
 
@@ -9,21 +9,21 @@ crons = ["0 * * * *"]
 # --- R2: product images / videos ---
 [[r2_buckets]]
 binding = "IMAGES"
-bucket_name = "allsha-images"
+bucket_name = "handi-assets"
 
 # --- KV: phone-verification OTP codes ---
 # Create a namespace in the Cloudflare dashboard (Workers & Pages -> KV) and
 # paste its id here; `preview_id` is used by `wrangler dev` / `wrangler types`.
 [[kv_namespaces]]
 binding = "OTP_KV"
-id = "d0e2ba7e799742e4aa9cf55d3d0f3aab"
-preview_id = "d0e2ba7e799742e4aa9cf55d3d0f3aab"
+id = "e883769436484f8e977055adb8fcb8ab"
+preview_id = "e883769436484f8e977055adb8fcb8ab"
 
 # --- Vars (non-secret) ---
 [vars]
 FIREBASE_PROJECT_ID = "allsha-rw"
-R2_ACCOUNT_ID = ""
-R2_BUCKET_NAME = "allsha-images"
+R2_ACCOUNT_ID = "7ffa31fde77e77578b9cb9264daa877e"
+R2_BUCKET_NAME = "handi-assets"
 FRONTEND_URL = "https://allsha.techinika.com"
 
 # --- Secrets ---

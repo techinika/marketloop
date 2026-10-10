@@ -267,7 +267,7 @@ async function main(): Promise<void> {
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-      R2_BUCKET_NAME: "allsha-images",
+      R2_BUCKET_NAME: "handi-assets",
       FIREBASE_PROJECT_ID: PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: "test@example.com",
       FIREBASE_PRIVATE_KEY: "test-key",

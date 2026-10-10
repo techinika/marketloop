@@ -26,7 +26,7 @@ export type AuthMiddlewareEnv = {
  * On the user's first authenticated request it lazily creates their
  * `users/{uid}` profile doc from the token claims — nothing else in the app
  * writes user docs for new signups, so without this public product pages
- * would show the seller as "Unknown". The sync is best-effort: a Firestore
+ * would show the artisan as "Unknown". The sync is best-effort: a Firestore
  * failure never fails the request.
  */
 export const authMiddleware = createMiddleware<AuthMiddlewareEnv>(async (c, next) => {

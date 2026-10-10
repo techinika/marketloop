@@ -1,248 +1,234 @@
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
 import Link from "next/link";
 
-import { HeroIllustration } from "@/components/HeroIllustration";
+import { HeroGallery } from "@/components/HeroGallery";
+import { ProductCard } from "@/components/ExploreFeed";
+import { FeaturedCategories } from "@/components/FeaturedCategories";
+import { FeaturedArtisans } from "@/components/FeaturedArtisans";
+import { fetchArtisans, fetchFeed } from "@/lib/products";
+import {
+  DUMMY_ARTISANS,
+  DUMMY_PRODUCTS,
+  withDummyProducts,
+} from "@/lib/dummyData";
+import { HandiDivider } from "@/components/HandiPattern";
 
 export const metadata: Metadata = {
-  title: "ALLSHA — Buy and sell used goods safely in Rwanda",
+  title: "Handmade Rwandan craft, made for you",
   description:
-    "ALLSHA is a peer-to-peer second-hand marketplace where every payment is held in escrow until delivery is confirmed. Buy and sell used phones, electronics, furniture and more in Rwanda.",
+    "Discover handmade Rwandan craft — baskets, Imigongo art, wood carvings, jewelry and more. Commission a piece made to order, or buy ready to ship, straight from the artisan who made it.",
   alternates: { canonical: "/" },
 };
 
-const TRUST_ITEMS = [
-  {
-    title: "Escrow on every sale",
-    description: "Money is only released once the buyer confirms delivery.",
-  },
-  {
-    title: "Mobile money & cards",
-    description: "Pay and withdraw with MTN MoMo, Airtel Money, or card.",
-  },
-  {
-    title: "Both parties protected",
-    description: "Disputes and refunds are handled by a real support team.",
-  },
-];
-
-const FEATURES: Array<{ icon: ReactNode; title: string; description: string }> = [
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-6" aria-hidden="true">
-        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z" />
-      </svg>
-    ),
-    title: "Escrow payments",
-    description: "Funds sit in escrow until you confirm you've received the item — never pay a stranger directly.",
-  },
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-6" aria-hidden="true">
-        <path d="m12 2 8.5 4.5v11L12 22l-8.5-4.5v-11L12 2Z" />
-        <path d="M12 22v-9" />
-        <path d="M3.5 6.5 12 11l8.5-4.5" />
-      </svg>
-    ),
-    title: "Negotiate or bid",
-    description: "Send offers on priced items or place bids on auctions and let the market decide.",
-  },
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-6" aria-hidden="true">
-        <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" />
-        <path d="M15 18H9" />
-        <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35a1 1 0 0 0-.78-.38H14" />
-        <circle cx="17" cy="18" r="2" />
-        <circle cx="7" cy="18" r="2" />
-      </svg>
-    ),
-    title: "Delivery tracking",
-    description: "Every order gets a delivery window, and both sides confirm once the item changes hands.",
-  },
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-6" aria-hidden="true">
-        <rect x="2" y="5" width="20" height="14" rx="2" />
-        <path d="M2 10h20" />
-      </svg>
-    ),
-    title: "Pay your way",
-    description: "Check out with MTN MoMo, Airtel Money, or your card through a trusted payment provider.",
-  },
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-6" aria-hidden="true">
-        <path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1" />
-        <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
-      </svg>
-    ),
-    title: "Seller wallet",
-    description: "Earnings land straight in your wallet — withdraw to mobile money whenever you want.",
-  },
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="size-6" aria-hidden="true">
-        <circle cx="12" cy="12" r="10" />
-        <path d="m9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-        <path d="M12 17h.01" />
-      </svg>
-    ),
-    title: "Real support",
-    description: "Admins monitor orders and step in for refunds, disputes, and force releases when needed.",
-  },
-];
+// Featured pieces/artisans are live marketplace data; refresh the prerender
+// regularly rather than freezing the build-time snapshot.
+export const revalidate = 60;
 
 const STEPS = [
   {
-    step: "01",
-    title: "List or browse",
-    description: "Discover second-hand goods in the marketplace, or snap a few photos and list your own item in minutes.",
+    title: "Discover a piece",
+    description:
+      "Browse hand-woven baskets, carvings, batiks and more — every piece made by a named Rwandan artisan.",
   },
   {
-    step: "02",
-    title: "Negotiate & pay",
-    description: "Agree on a price with offers or bids. Pay with MoMo or card — the money is held safely in escrow.",
+    title: "Commission or buy",
+    description:
+      "Order it made to your taste, or grab a finished piece ready to ship. Pay with MoMo or card, held safely in escrow.",
   },
   {
-    step: "03",
-    title: "Confirm & get paid",
-    description: "Receive your item, confirm delivery, and escrow releases the funds to the seller. Simple and fair.",
+    title: "Receive your handmade work",
+    description:
+      "Follow the making, confirm delivery, and the payment reaches your artisan. Made by hand, for you.",
   },
 ];
 
-export default function Home() {
+const TRUST = [
+  {
+    title: "Escrow on every order",
+    description: "Your money is held until you confirm the piece arrived.",
+  },
+  {
+    title: "MoMo & card ready",
+    description: "Pay with MTN MoMo, Airtel Money or card — RWF and USD.",
+  },
+  {
+    title: "Named, verified makers",
+    description: "Buy from real Rwandan artisans, rated by past buyers.",
+  },
+];
+
+export default async function Home() {
+  let featuredProducts = DUMMY_PRODUCTS.slice(0, 9);
+  let artisans = DUMMY_ARTISANS;
+  try {
+    const [feed, realArtisans] = await Promise.all([
+      fetchFeed({ sortBy: "newest", page: 1, pageSize: 9 }),
+      fetchArtisans(3),
+    ]);
+    featuredProducts = withDummyProducts(feed.products, DUMMY_PRODUCTS).slice(0, 9);
+    artisans = withDummyProducts(realArtisans, DUMMY_ARTISANS).slice(0, 3);
+  } catch {
+    // API unreachable at request time — fall back to demo data so the landing
+    // page still shows the shape of the marketplace.
+  }
+
   const websiteSchema = {
     "@context": "https://schema.org",
     "@type": "WebSite",
-    name: "ALLSHA",
+    name: "Handi",
     url: "/",
     description: metadata.description,
   };
+
   return (
     <div className="flex-1">
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteSchema) }}
       />
-      <section className="border-b border-border bg-surface">
-        <div className="container-page grid items-center gap-10 py-16 sm:py-20 lg:grid-cols-2 lg:gap-14">
+
+      {/* Hero */}
+      <section className="relative overflow-hidden border-b border-border bg-surface">
+        <div className="pointer-events-none absolute inset-0 opacity-[0.06]">
+          <svg viewBox="0 0 100 100" className="size-full text-ochre" aria-hidden="true">
+            <defs>
+              <pattern id="hero-motif" width="16" height="16" patternUnits="userSpaceOnUse">
+                <g fill="none" stroke="currentColor" strokeWidth="0.5">
+                  <path d="M4 12a4 4 0 1 1 4-4" />
+                  <path d="M16 2h4M16 14h4" opacity="0.6" />
+                </g>
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#hero-motif)" />
+          </svg>
+        </div>
+        <div className="container-page relative grid items-center gap-10 py-16 sm:py-20 lg:grid-cols-2 lg:gap-14">
           <div>
             <span className="badge badge-accent">
               <span className="size-1.5 rounded-full bg-accent" />
-              Peer-to-peer marketplace · Rwanda
+              Handmade in Rwanda · commissioned directly from artisans
             </span>
-            <h1 className="mt-5 text-4xl font-semibold leading-tight tracking-tight text-foreground sm:text-5xl sm:leading-tight">
-              Buy and sell used goods,{" "}
-              <span className="text-accent-strong">safely.</span>
+            <h1 className="heading mt-5 text-4xl leading-tight text-foreground sm:text-5xl sm:leading-tight">
+              Made by hand,{" "}
+              <span className="text-accent-strong">made for you.</span>
             </h1>
             <p className="mt-5 max-w-md text-lg leading-8 text-secondary">
-              ALLSHA escrows every payment until the item is delivered — so buyers never lose
-              their money and sellers always get paid.
+              Handi is where Rwandan handiwork finds its people. Commission a
+              basket, carving or painting made to order — or fall for a finished
+              piece ready to ship. Money stays safe in escrow until your hands
+              hold it.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link href="/explore" className="btn btn-primary">
-                Explore the marketplace
+                Discover handmade pieces
               </Link>
               <Link href="/sell/new" className="btn btn-secondary">
-                Start selling
+                Sell your craft
               </Link>
             </div>
-          </div>
-
-          <div className="w-full">
-            <HeroIllustration />
-          </div>
-        </div>
-      </section>
-
-      <section className="container-page py-10">
-        <ul className="grid gap-6 sm:grid-cols-3">
-          {TRUST_ITEMS.map((item) => (
-            <li key={item.title} className="flex gap-3">
-              <span className="mt-1.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-accent-soft">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-3 text-accent-strong" aria-hidden="true">
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
-              </span>
-              <div>
-                <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                <p className="mt-1 text-sm leading-6 text-secondary">{item.description}</p>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section id="features" className="bg-surface py-16 sm:py-20">
-        <div className="container-page">
-          <div className="mx-auto max-w-2xl text-center">
-            <span className="badge badge-neutral">Why ALLSHA</span>
-            <h2 className="mt-4 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-              Built for trust, end to end
-            </h2>
-            <p className="mt-4 text-lg leading-8 text-secondary">
-              Everything you need to trade second-hand goods without the risk of being scammed.
+            <p className="mt-6 text-sm text-muted">
+              MTN MoMo · Airtel Money · Card · escrow on every order
             </p>
           </div>
 
-          <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {FEATURES.map((feature) => (
-              <div key={feature.title} className="card p-6">
-                <span className="flex size-11 items-center justify-center rounded-xl bg-accent-soft text-accent-strong">
-                  {feature.icon}
-                </span>
-                <h3 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-                  {feature.title}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-secondary">{feature.description}</p>
-              </div>
-            ))}
-          </div>
+          <HeroGallery products={featuredProducts} />
         </div>
       </section>
 
-      <section id="how-it-works" className="container-page py-16 sm:py-20">
+      {/* Trust strip */}
+      <section className="border-b border-border bg-background">
+        <div className="container-page grid gap-6 py-8 sm:grid-cols-3">
+          {TRUST.map((item) => (
+            <div key={item.title} className="flex items-start gap-3">
+              <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent-strong">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="size-4" aria-hidden="true">
+                  <path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3Z" />
+                </svg>
+              </span>
+              <div>
+                <p className="text-sm font-medium text-foreground">{item.title}</p>
+                <p className="mt-0.5 text-sm leading-6 text-secondary">{item.description}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <FeaturedCategories limit={6} />
+
+      <HandiDivider className="mx-auto max-w-6xl px-6" />
+
+      {/* How it works */}
+      <section id="how-it-works" className="container-page py-14 sm:py-16">
         <div className="mx-auto max-w-2xl text-center">
-          <span className="badge badge-neutral">How it works</span>
-          <h2 className="mt-4 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
-            Three steps to a safe trade
+          <span className="badge badge-neutral">How Handi works</span>
+          <h2 className="heading mt-4 text-3xl text-foreground sm:text-4xl">
+            Three steps, from loom to doorstep
           </h2>
         </div>
 
         <ol className="mt-12 grid gap-6 lg:grid-cols-3">
-          {STEPS.map((item) => (
-            <li key={item.step} className="relative rounded-card border border-border bg-surface p-6">
-              <span className="text-4xl font-semibold tracking-tight text-accent-strong/20">
-                {item.step}
-              </span>
-              <h3 className="mt-3 text-lg font-semibold tracking-tight text-foreground">{item.title}</h3>
+          {STEPS.map((item, i) => (
+            <li key={item.title} className="relative rounded-card border border-border bg-surface p-6">
+              <span className="heading text-4xl text-accent-strong/25">{`0${i + 1}`}</span>
+              <h3 className="heading mt-3 text-lg text-foreground">{item.title}</h3>
               <p className="mt-2 text-sm leading-6 text-secondary">{item.description}</p>
             </li>
           ))}
         </ol>
       </section>
 
-      <section className="container-page pb-20">
+      {/* Featured pieces */}
+      {featuredProducts.length > 0 && (
+        <section id="features" className="bg-surface py-14 sm:py-16">
+          <div className="container-page">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <span className="badge badge-neutral">From the market</span>
+                <h2 className="heading mt-4 text-3xl text-foreground sm:text-4xl">
+                  Fresh from the hands of artisans
+                </h2>
+                <p className="mt-3 max-w-xl text-base leading-7 text-secondary">
+                  Newest pieces across baskets, art, wood and textiles —
+                  each one made in Rwanda.
+                </p>
+              </div>
+              <Link href="/explore" className="btn btn-secondary">
+                See everything
+              </Link>
+            </div>
+
+            <div className="mt-10 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              {featuredProducts.map((product) => (
+                <ProductCard key={product.id} product={product} />
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Featured artisans */}
+      <FeaturedArtisans artisans={artisans} />
+
+      {/* Artisan CTA */}
+      <section className="container-page py-14 sm:py-16">
         <div className="card flex flex-col items-center gap-6 bg-gradient-to-br from-accent to-accent-strong p-10 text-center sm:p-14">
-          <h2 className="max-w-xl text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-            Ready to find a deal or declutter?
+          <h2 className="heading max-w-xl text-3xl text-white sm:text-4xl">
+            Craft something the world will love
           </h2>
-          <p className="max-w-md text-base leading-7 text-emerald-50">
-            Join the marketplace — list something you no longer need or grab a bargain today.
+          <p className="max-w-md text-base leading-7 text-accent-soft">
+            Share your craft with Rwanda and beyond. List a piece made to order
+            or ready to ship, and get paid securely the moment it&apos;s delivered.
           </p>
           <div className="flex flex-wrap justify-center gap-3">
-            <Link
-              href="/explore"
-              className="btn bg-white text-accent-strong hover:bg-emerald-50"
-            >
-              Explore now
+            <Link href="/sell/new" className="btn bg-white text-accent-strong hover:bg-accent-soft">
+              Sell your craft on Handi
             </Link>
             <Link
-              href="/sell/new"
+              href="/explore"
               className="btn border border-white/40 bg-white/10 text-white hover:bg-white/20"
             >
-              List an item
+              Explore the market
             </Link>
           </div>
         </div>

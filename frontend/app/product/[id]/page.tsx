@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 import { ProductDetail } from "@/components/ProductDetail";
+import { Breadcrumbs } from "@/components/Breadcrumbs";
+import { ProductDetailSkeleton } from "@/components/ui/Skeleton";
 import { formatPrice, mediaUrl } from "@/lib/publicApi";
+import { categoryToSlug } from "@/lib/categoryMeta";
 import { fetchBidSummary, fetchProduct } from "@/lib/products";
 import { stripHtml } from "@/lib/html";
 import type { BidSummary, ProductDetail as ProductDetailData } from "@/types";
@@ -13,8 +17,11 @@ type ProductInitial = {
 
 /** JSON-LD Product schema for search-result rich snippets. */
 function productSchema(data: ProductDetailData): Record<string, unknown> {
-  const { product, seller } = data;
+  const { product, artisan } = data;
   const priceCurrency = product.priceCurrency;
+  const soldOut =
+    product.status !== "active" ||
+    (product.productType === "ready_to_ship" && (product.quantityAvailable ?? 0) <= 0);
   return {
     "@context": "https://schema.org",
     "@type": "Product",
@@ -27,15 +34,14 @@ function productSchema(data: ProductDetailData): Record<string, unknown> {
       "@type": "Offer",
       price: product.priceAmount,
       priceCurrency,
-      availability:
-        product.status === "active"
-          ? "https://schema.org/InStock"
-          : "https://schema.org/OutOfStock",
+      availability: soldOut
+        ? "https://schema.org/OutOfStock"
+        : "https://schema.org/InStock",
       url: `/product/${product.id}`,
     },
-    seller: {
+    artisan: {
       "@type": "Person",
-      name: seller.name,
+      name: artisan.name,
     },
   };
 }
@@ -77,7 +83,7 @@ export async function generateMetadata({
     };
   } catch {
     // Unknown / removed listing: keep it out of the index.
-    return { title: "Product not found — ALLSHA", robots: { index: false } };
+    return { title: "Product not found", robots: { index: false } };
   }
 }
 
@@ -107,7 +113,24 @@ export default async function ProductPage({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(productSchema(initial.productDetail)) }}
         />
       )}
-      <ProductDetail initial={initial} />
+      {initial && (
+        <div className="container-page pt-6">
+          <Breadcrumbs
+            items={[
+              { name: "Home", path: "/" },
+              { name: "Discover", path: "/explore" },
+              {
+                name: initial.productDetail.product.category,
+                path: `/c/${categoryToSlug(initial.productDetail.product.category)}`,
+              },
+              { name: initial.productDetail.product.title, path: `/product/${id}` },
+            ]}
+          />
+        </div>
+      )}
+      <Suspense fallback={<ProductDetailSkeleton />}>
+        <ProductDetail initial={initial} />
+      </Suspense>
     </>
   );
 }

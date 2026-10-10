@@ -202,8 +202,8 @@ async function main(): Promise<void> {
 
   const createdUser = await db.createDoc<User>(collections.users, "seed-user-001", {
     uid: "seed-user-001",
-    name: "Seed Seller",
-    email: "seller@example.com",
+    name: "Seed Artisan",
+    email: "artisan@example.com",
     photoUrl: null,
     phone: null,
     walletBalance: 0,
@@ -214,8 +214,8 @@ async function main(): Promise<void> {
   assert(createdUser.walletBalance === 0, "walletBalance should default to 0");
 
   const gotUser = await db.getDoc<User>(`${collections.users}/seed-user-001`);
-  assert(gotUser?.email === "seller@example.com", "getDoc email mismatch");
-  assert(gotUser?.name === "Seed Seller", "getDoc name mismatch");
+  assert(gotUser?.email === "artisan@example.com", "getDoc email mismatch");
+  assert(gotUser?.name === "Seed Artisan", "getDoc name mismatch");
 
   const missing = await db.getDoc<User>(`${collections.users}/nope`);
   assert(missing === null, "getDoc should return null for missing doc");
@@ -228,7 +228,7 @@ async function main(): Promise<void> {
   assert(reRead?.walletBalance === 5000, "update was not persisted");
 
   const createdProduct = await db.createDoc<Product>(collections.products, "seed-product-001", {
-    sellerId: "seed-user-001",
+    artisanId: "seed-user-001",
     title: "Sample Second-hand Laptop",
     description: "A gently used laptop.",
     category: "Electronics",
@@ -242,6 +242,19 @@ async function main(): Promise<void> {
     videoUrl: null,
     deliveryFee: 2000,
     deliveryFeePayer: "buyer",
+    productType: "made_to_order",
+    tags: [],
+    materials: [],
+    region: null,
+    acceptingOrders: true,
+    maxConcurrentOrders: null,
+    currentOpenOrders: 0,
+    manuallyPaused: false,
+    quantityAvailable: 0,
+    productionTimeDays: 7,
+    isCustomizable: false,
+    customizationOptions: [],
+    allowsReferenceUpload: true,
     status: "active",
     createdAt: now,
     updatedAt: now,
@@ -267,7 +280,7 @@ async function main(): Promise<void> {
   assert(secondPage.length === 0, `expected 0 results after offset 1, got ${secondPage.length}`);
 
   const updatedProduct = await db.createDoc<Product>(collections.products, "seed-product-002", {
-    sellerId: "seed-user-001",
+    artisanId: "seed-user-001",
     title: "Another Item",
     description: "Second product.",
     category: "Home",
@@ -280,7 +293,20 @@ async function main(): Promise<void> {
     images: ["https://r2.example.dev/seed/product-002/1.jpg"],
     videoUrl: null,
     deliveryFee: 0,
-    deliveryFeePayer: "seller",
+    deliveryFeePayer: "artisan",
+    productType: "ready_to_ship",
+    tags: ["gift"],
+    materials: [],
+    region: "Kigali",
+    acceptingOrders: true,
+    maxConcurrentOrders: null,
+    currentOpenOrders: 0,
+    manuallyPaused: false,
+    quantityAvailable: 2,
+    productionTimeDays: 0,
+    isCustomizable: false,
+    customizationOptions: [],
+    allowsReferenceUpload: false,
     status: "active",
     createdAt: "2026-08-13T00:00:01.000Z",
     updatedAt: "2026-08-13T00:00:01.000Z",

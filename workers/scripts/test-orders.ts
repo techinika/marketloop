@@ -1,5 +1,5 @@
 // End-to-end tests for orders (escrow), payments (Paypack + Pesapal), webhooks,
-// delivery-confirmation release, scheduled auto-refund, and the seller wallet.
+// delivery-confirmation release, scheduled auto-refund, and the artisan wallet.
 //
 // Same harness as test-bids.ts (real Hono app, mock JWKS + minted RS256 tokens,
 // in-memory Firestore REST mock) plus local mock Paypack/Pesapal HTTP servers.
@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 
 import app from "../src/index";
 import { FirestoreClient, type FirestoreDocument, type FirestoreField } from "../src/lib/firestore";
-import { processExpiredOrders, releaseToSeller } from "../src/lib/escrow";
+import { processExpiredOrders, releaseToArtisan } from "../src/lib/escrow";
 import { collections, type Bid, type Order, type Product, type User, type WalletTransaction } from "../src/models";
 
 const PROJECT_ID = "allsha-rw";
@@ -145,7 +145,9 @@ function firestoreMock(input: Parameters<typeof fetch>[0], init?: RequestInit): 
     for (const { fieldPath, op, value } of filters) {
       const want = decodeValue(value);
       entries = entries.filter(([, doc]) => {
-        const got = decodeValue(doc.fields[fieldPath]!);
+        const raw = doc.fields[fieldPath];
+        if (!raw) return false;
+        const got = decodeValue(raw);
         switch (op) {
           case "LESS_THAN":
             return (got as number) < (want as number);
@@ -421,16 +423,23 @@ async function createProduct(
     json(token, {
       title: "Order test item",
       description: "An item used to test orders and escrow.",
-      category: "Electronics",
+      category: "Pottery",
       priceAmount: 50000,
       priceCurrency: "RWF",
       isNegotiable: false,
       isBiddingEnabled: false,
       conditionNote: "like new",
-      images: ["uploads/seller-1/img.jpg"],
+      images: ["uploads/artisan-1/img.jpg"],
       videoUrl: null,
       deliveryFee: 0,
-      deliveryFeePayer: "seller",
+      deliveryFeePayer: "artisan",
+      productType: "made_to_order",
+      tags: [],
+      materials: [],
+      region: null,
+      acceptingOrders: true,
+      maxConcurrentOrders: null,
+      productionTimeDays: 7,
       ...overrides,
     }),
     env,
@@ -445,15 +454,15 @@ async function reserve(token: string, productId: string): Promise<void> {
   assert(res.status === 200, `reserve failed with ${res.status}`);
 }
 
-async function placeAndAcceptBid(buyerToken: string, sellerToken: string, productId: string, amount: number): Promise<void> {
+async function placeAndAcceptBid(buyerToken: string, artisanToken: string, productId: string, amount: number): Promise<void> {
   const place = await app.request(`/products/${productId}/bids`, json(buyerToken, { amount, currency: "RWF" }), env);
   assert(place.status === 201, `place bid failed with ${place.status}`);
   const bid = ((await place.json()) as { bid: Bid & { id: string } }).bid;
-  const accept = await app.request(`/bids/${bid.id}/accept`, authedPost(sellerToken), env);
+  const accept = await app.request(`/bids/${bid.id}/accept`, authedPost(artisanToken), env);
   assert(accept.status === 200, `accept bid failed with ${accept.status}`);
 }
 
-async function getOrder(token: string, orderId: string): Promise<{ order: Order & { id: string }; product: unknown; buyer: unknown; seller: unknown }> {
+async function getOrder(token: string, orderId: string): Promise<{ order: Order & { id: string }; product: unknown; buyer: unknown; artisan: unknown }> {
   const res = await app.request(`/orders/${orderId}`, bearer(token), env);
   assert(res.status === 200, `GET /orders/${orderId} failed with ${res.status}`);
   return (await res.json()) as never;
@@ -466,7 +475,7 @@ async function wallet(token: string): Promise<{ walletBalance: number; transacti
 }
 
 let env: Record<string, unknown>;
-let sellerToken: string;
+let artisanToken: string;
 let buyerToken: string;
 let strangerToken: string;
 let db: FirestoreClient;
@@ -507,7 +516,7 @@ async function main(): Promise<void> {
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-      R2_BUCKET_NAME: "allsha-images",
+      R2_BUCKET_NAME: "handi-assets",
       FIREBASE_PROJECT_ID: PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: "test@example.com",
       FIREBASE_PRIVATE_KEY: "test-key",
@@ -533,7 +542,7 @@ async function main(): Promise<void> {
       iat: now - 60,
       exp: now + 3600,
     };
-    sellerToken = await mintToken({ ...claims, sub: "seller-1", name: "Seller", email: "seller@example.com" }, privateKey);
+    artisanToken = await mintToken({ ...claims, sub: "artisan-1", name: "Artisan", email: "artisan@example.com" }, privateKey);
     buyerToken = await mintToken({ ...claims, sub: "buyer-1", name: "Buyer One", email: "buyer1@example.com" }, privateKey);
     strangerToken = await mintToken({ ...claims, sub: "buyer-2", name: "Buyer Two", email: "buyer2@example.com" }, privateKey);
 
@@ -545,7 +554,7 @@ async function main(): Promise<void> {
       accessTokenProvider: async () => "test-access-token",
     });
     for (const u of [
-      { uid: "seller-1", name: "Seller", email: "seller@example.com", photoUrl: null },
+      { uid: "artisan-1", name: "Artisan", email: "artisan@example.com", photoUrl: null },
       { uid: "buyer-1", name: "Buyer One", email: "buyer1@example.com", photoUrl: null },
       { uid: "buyer-2", name: "Buyer Two", email: "buyer2@example.com", photoUrl: null },
     ]) {
@@ -562,17 +571,17 @@ async function main(): Promise<void> {
     }
 
     // ---- A. RWF accepted-bid flow (deliveryFeePayer = buyer) ----------------
-    const productA = await createProduct(sellerToken, {
+    const productA = await createProduct(artisanToken, {
       title: "Bid escrow item",
       isBiddingEnabled: true,
       priceAmount: 50000,
       deliveryFee: 5000,
       deliveryFeePayer: "buyer",
     });
-    await placeAndAcceptBid(buyerToken, sellerToken, productA, 46000);
+    await placeAndAcceptBid(buyerToken, artisanToken, productA, 46000);
 
     // Order creation guards
-    const notReservedProduct = await createProduct(sellerToken, { title: "Not reserved item", priceAmount: 1000 });
+    const notReservedProduct = await createProduct(artisanToken, { title: "Not reserved item", priceAmount: 1000 });
     const orderNotReserved = await app.request("/orders", json(buyerToken, { productId: notReservedProduct }), env);
     assert(orderNotReserved.status === 409, `unreserved product should be 409, got ${orderNotReserved.status}`);
 
@@ -608,7 +617,7 @@ async function main(): Promise<void> {
     assert(strangerView.status === 403, `stranger should get 403, got ${strangerView.status}`);
     const buyerView = await getOrder(buyerToken, orderA.id);
     assert(buyerView.order.id === orderA.id, "buyer can view own order");
-    assert((buyerView.seller as { name: string }).name === "Seller", "seller summary included");
+    assert((buyerView.artisan as { name: string }).name === "Artisan", "artisan summary included");
     assert((buyerView.product as { title: string }).title === "Bid escrow item", "product summary included");
     const missing = await app.request("/orders/nonexistent", bearer(buyerToken), env);
     assert(missing.status === 404, `unknown order should be 404, got ${missing.status}`);
@@ -623,17 +632,40 @@ async function main(): Promise<void> {
     const noSig = await app.request("/webhooks/paypack", { method: "POST", body: "{}" }, env);
     assert(noSig.status === 401, `missing signature should be 401, got ${noSig.status}`);
 
-    // Success webhook -> held, sold, deadline set
+    // Success webhook -> held, sold, production starts (no deadline until ready)
     const ack = await paypackWebhook({ ref: orderA.paymentReference, status: "successful", kind: "CASHIN" });
     assert(ack.status === 200, `webhook ack failed with ${ack.status}`);
     const heldA = await getOrder(buyerToken, orderA.id);
     assert(heldA.order.escrowStatus === "held", "escrow should be held after successful payment");
-    assert(heldA.order.deliveryDeadline.length > 0, "delivery deadline should be set");
+    assert(heldA.order.paymentPlan === "full", "default payment plan is full prepay");
+    assert(heldA.order.depositPaid === true, "full plan marks the deposit paid");
+    assert(heldA.order.finalAmount === 0, "full plan has no remaining balance");
+    assert(heldA.order.productionStatus === "in_production", "production starts once paid");
+    assert(heldA.order.deliveryDeadline === "", "no delivery deadline during production");
     assert((heldA.product as { status: string }).status === "sold", "product should be sold");
+
+    // Cannot confirm delivery before the artisan marks the piece ready.
+    const earlyConfirm = await app.request(
+      `/orders/${orderA.id}/confirm-delivery`,
+      json(buyerToken, { received: true, rating: 5 }),
+      env,
+    );
+    assert(earlyConfirm.status === 409, `early confirm should be 409, got ${earlyConfirm.status}`);
+
+    // Artisan marks ready -> awaiting_delivery + 5-day window (full plan, no 2nd payment)
+    const readyA = await app.request(`/orders/${orderA.id}/mark-ready`, authedPost(artisanToken), env);
+    assert(readyA.status === 200, `mark-ready failed with ${readyA.status}`);
+    const afterReadyA = (await readyA.json()) as { order: Order & { id: string } };
+    assert(afterReadyA.order.productionStatus === "awaiting_delivery", "full plan goes straight to awaiting_delivery");
+    assert(afterReadyA.order.deliveryDeadline.length > 0, "delivery deadline is set once ready");
+    const cannotMarkAgain = await app.request(`/orders/${orderA.id}/mark-ready`, authedPost(artisanToken), env);
+    assert(cannotMarkAgain.status === 409, "mark-ready is only valid once");
+    const strangerMark = await app.request(`/orders/${orderA.id}/mark-ready`, authedPost(strangerToken), env);
+    assert(strangerMark.status === 403, "only the artisan can mark ready");
     const heldAgain = await paypackWebhook({ ref: orderA.paymentReference, status: "successful", kind: "CASHIN" });
     assert(heldAgain.status === 200, "duplicate webhook should ack");
 
-    // Confirm delivery: buyer first, then seller releases escrow
+    // Confirm delivery: buyer first, then artisan releases escrow
     const confirmBuyer = await app.request(
       `/orders/${orderA.id}/confirm-delivery`,
       json(buyerToken, { received: true, rating: 5, comment: "Arrived in perfect condition" }),
@@ -651,24 +683,24 @@ async function main(): Promise<void> {
     );
     assert(confirmStranger.status === 403, `stranger confirm should be 403, got ${confirmStranger.status}`);
 
-    const confirmSeller = await app.request(
+    const confirmArtisan = await app.request(
       `/orders/${orderA.id}/confirm-delivery`,
-      json(sellerToken, { received: true, rating: 4 }),
+      json(artisanToken, { received: true, rating: 4 }),
       env,
     );
-    assert(confirmSeller.status === 200, `seller confirm failed with ${confirmSeller.status}`);
-    const releasedA = (await confirmSeller.json()) as { order: Order & { id: string } };
+    assert(confirmArtisan.status === 200, `artisan confirm failed with ${confirmArtisan.status}`);
+    const releasedA = (await confirmArtisan.json()) as { order: Order & { id: string } };
     assert(releasedA.order.escrowStatus === "released", "escrow released when both confirm");
-    assert(releasedA.order.sellerConfirmedDelivery === true, "seller confirmation recorded");
+    assert(releasedA.order.artisanConfirmedDelivery === true, "artisan confirmation recorded");
     assert((releasedA.order.buyerFeedback as { rating: number }).rating === 5, "buyer feedback stored");
-    assert((releasedA.order.sellerFeedback as { rating: number }).rating === 4, "seller feedback stored");
+    assert((releasedA.order.artisanFeedback as { rating: number }).rating === 4, "artisan feedback stored");
 
-    // Seller wallet credited the FULL agreedAmount (deliveryFeePayer = buyer)
-    let sellerWallet = await wallet(sellerToken);
-    const balanceAfterA = sellerWallet.walletBalance;
-    const creditTx = sellerWallet.transactions[0]!;
-    assert(balanceAfterA === 46000, `seller balance should be 46000, got ${balanceAfterA}`);
-    assert(sellerWallet.transactions.length === 1, "one credit transaction");
+    // Artisan wallet credited the FULL agreedAmount (deliveryFeePayer = buyer)
+    let artisanWallet = await wallet(artisanToken);
+    const balanceAfterA = artisanWallet.walletBalance;
+    const creditTx = artisanWallet.transactions[0]!;
+    assert(balanceAfterA === 46000, `artisan balance should be 46000, got ${balanceAfterA}`);
+    assert(artisanWallet.transactions.length === 1, "one credit transaction");
     assert(creditTx.type === "credit", "credit transaction");
     assert(creditTx.amount === 46000, "credit = full agreedAmount");
     assert(creditTx.orderId === orderA.id, "credit references the order");
@@ -680,11 +712,11 @@ async function main(): Promise<void> {
     );
     assert(confirmReleased.status === 409, `confirm on released order should be 409, got ${confirmReleased.status}`);
 
-    // Ratings were applied to the counterpart users (buyer->seller 5, seller->buyer 4)
-    const ratedSeller = await db.getDoc<User>(`${collections.users}/seller-1`);
+    // Ratings were applied to the counterpart users (buyer->artisan 5, artisan->buyer 4)
+    const ratedArtisan = await db.getDoc<User>(`${collections.users}/artisan-1`);
     const ratedBuyer = await db.getDoc<User>(`${collections.users}/buyer-1`);
-    assert(ratedSeller!.avgRating === 5, `seller avgRating should be 5, got ${ratedSeller!.avgRating}`);
-    assert(ratedSeller!.ratingCount === 1, "seller ratingCount should be 1");
+    assert(ratedArtisan!.avgRating === 5, `artisan avgRating should be 5, got ${ratedArtisan!.avgRating}`);
+    assert(ratedArtisan!.ratingCount === 1, "artisan ratingCount should be 1");
     assert(ratedBuyer!.avgRating === 4, `buyer avgRating should be 4, got ${ratedBuyer!.avgRating}`);
     assert(ratedBuyer!.ratingCount === 1, "buyer ratingCount should be 1");
 
@@ -719,14 +751,14 @@ async function main(): Promise<void> {
     const buyerMsg = ((await buyerSend.json()) as { message: { id: string; senderId: string; text: string } }).message;
     assert(buyerMsg.senderId === "buyer-1" && buyerMsg.text === "When will you ship?", "buyer message stored");
 
-    const sellerReply = await app.request(
+    const artisanReply = await app.request(
       `/orders/${orderA.id}/messages`,
-      json(sellerToken, { text: "Tomorrow morning." }),
+      json(artisanToken, { text: "Tomorrow morning." }),
       env,
     );
-    assert(sellerReply.status === 201, `seller reply failed with ${sellerReply.status}`);
+    assert(artisanReply.status === 201, `artisan reply failed with ${artisanReply.status}`);
 
-    const thread = (await (await app.request(`/orders/${orderA.id}/messages`, bearer(sellerToken), env)).json()) as {
+    const thread = (await (await app.request(`/orders/${orderA.id}/messages`, bearer(artisanToken), env)).json()) as {
       messages: Array<{ id: string; senderId: string; text: string; isRead: boolean }>;
     };
     assert(thread.messages.length === 2, "two messages in thread");
@@ -734,7 +766,7 @@ async function main(): Promise<void> {
     assert(thread.messages[1]!.text === "Tomorrow morning.", "newest last");
     assert(thread.messages[0]!.isRead === false && thread.messages[1]!.isRead === false, "own messages stored unread");
 
-    // Mark-read: buyer marks the seller's reply as read
+    // Mark-read: buyer marks the artisan's reply as read
     const markRead = await app.request(`/orders/${orderA.id}/messages/read`, authedPost(buyerToken), env);
     assert(markRead.status === 200, `mark-read failed with ${markRead.status}`);
     const markReadBody = (await markRead.json()) as { updated: number };
@@ -752,7 +784,7 @@ async function main(): Promise<void> {
     assert(canConfirm.allowed === false && canConfirm.escrowStatus === "released", "cannot confirm a released order");
 
     // ---- A4. Dispute: received:false flags the order, holds funds -------------
-    const productDisp = await createProduct(sellerToken, { title: "Disputed item", priceAmount: 8000 });
+    const productDisp = await createProduct(artisanToken, { title: "Disputed item", priceAmount: 8000 });
     await reserve(buyerToken, productDisp);
     const createDisp = await app.request("/orders", json(buyerToken, { productId: productDisp, phoneNumber: "0788123456" }), env);
     const orderDisp = ((await createDisp.json()) as { order: Order & { id: string } }).order;
@@ -777,26 +809,26 @@ async function main(): Promise<void> {
     assert(disputed.order.escrowStatus === "held", "funds stay held on dispute");
     assert(disputed.order.buyerFeedback == null, "no rating recorded for a disputed delivery");
 
-    // The seller cannot auto-release a disputed order.
+    // The artisan cannot auto-release a disputed order.
     const releaseDisp = await app.request(
       `/orders/${orderDisp.id}/confirm-delivery`,
-      json(sellerToken, { received: true, rating: 5 }),
+      json(artisanToken, { received: true, rating: 5 }),
       env,
     );
     assert(releaseDisp.status === 409, `releasing a disputed order should be 409, got ${releaseDisp.status}`);
 
-    // ---- B. RWF direct-buy with deliveryFeePayer = seller --------------------
-    const productB = await createProduct(sellerToken, {
+    // ---- B. RWF direct-buy with deliveryFeePayer = artisan --------------------
+    const productB = await createProduct(artisanToken, {
       title: "Direct escrow item",
       priceAmount: 50000,
       deliveryFee: 3000,
-      deliveryFeePayer: "seller",
+      deliveryFeePayer: "artisan",
     });
     await reserve(buyerToken, productB);
     const createB = await app.request("/orders", json(buyerToken, { productId: productB, phoneNumber: "0788123456" }), env);
     assert(createB.status === 200, `POST /orders B failed with ${createB.status}`);
     const orderB = ((await createB.json()) as { order: Order & { id: string } }).order;
-    assert(orderB.totalPaid === 53000, "totalPaid includes delivery fee even when seller pays it");
+    assert(orderB.totalPaid === 53000, "totalPaid includes delivery fee even when artisan pays it");
 
     // Failed payment webhook -> order failed, product back to active
     const failAck = await paypackWebhook({ ref: orderB.paymentReference, status: "failed", kind: "CASHIN" });
@@ -818,6 +850,8 @@ async function main(): Promise<void> {
 
     // Reuse-after-failure retry should be able to succeed.
     await paypackWebhook({ ref: retriedB.paymentReference, status: "successful", kind: "CASHIN" });
+    const readyB = await app.request(`/orders/${orderB.id}/mark-ready`, authedPost(artisanToken), env);
+    assert(readyB.status === 200, `mark-ready B failed with ${readyB.status}`);
     await app.request(
       `/orders/${orderB.id}/confirm-delivery`,
       json(buyerToken, { received: true, rating: 5 }),
@@ -825,20 +859,20 @@ async function main(): Promise<void> {
     );
     const confirmB = await app.request(
       `/orders/${orderB.id}/confirm-delivery`,
-      json(sellerToken, { received: true, rating: 5 }),
+      json(artisanToken, { received: true, rating: 5 }),
       env,
     );
     assert(confirmB.status === 200, `confirm B failed with ${confirmB.status}`);
 
-    // deliveryFeePayer = seller -> seller receives agreedAmount - deliveryFee
-    sellerWallet = await wallet(sellerToken);
-    const balanceAfterB = sellerWallet.walletBalance;
-    const newestCredit = sellerWallet.transactions[0]!.amount;
-    assert(balanceAfterB === 93000, `seller balance should now be 93000, got ${balanceAfterB}`);
-    assert(newestCredit === 47000, "seller absorbs the delivery fee");
+    // deliveryFeePayer = artisan -> artisan receives agreedAmount - deliveryFee
+    artisanWallet = await wallet(artisanToken);
+    const balanceAfterB = artisanWallet.walletBalance;
+    const newestCredit = artisanWallet.transactions[0]!.amount;
+    assert(balanceAfterB === 93000, `artisan balance should now be 93000, got ${balanceAfterB}`);
+    assert(newestCredit === 47000, "artisan absorbs the delivery fee");
 
     // ---- C. RWF provider-down handling (502 -> failed order, retry works) ----
-    const productC = await createProduct(sellerToken, { title: "Provider down item", priceAmount: 20000 });
+    const productC = await createProduct(artisanToken, { title: "Provider down item", priceAmount: 20000 });
     await reserve(buyerToken, productC);
     paypackCashinShouldFail = true;
     const failRes = await app.request("/orders", json(buyerToken, { productId: productC, phoneNumber: "0788123456" }), env);
@@ -860,7 +894,7 @@ async function main(): Promise<void> {
     assert(retriedC.escrowStatus === "pending_payment", "provider-down retry returns to pending_payment");
 
     // ---- D. USD Pesapal flow (deliveryFeePayer = buyer) ----------------------
-    const productD = await createProduct(sellerToken, {
+    const productD = await createProduct(artisanToken, {
       title: "Card item",
       priceAmount: 150,
       priceCurrency: "USD",
@@ -880,12 +914,12 @@ async function main(): Promise<void> {
     assert(pesapalSubmissions[0]!.notificationId === "ipn-1", "submitOrder uses registered IPN id");
 
     // Second USD order must reuse the cached IPN id (no re-registration).
-    const productE = await createProduct(sellerToken, {
+    const productE = await createProduct(artisanToken, {
       title: "Card item 2",
       priceAmount: 200,
       priceCurrency: "USD",
       deliveryFee: 10,
-      deliveryFeePayer: "seller",
+      deliveryFeePayer: "artisan",
     });
     await reserve(buyerToken, productE);
     const createE = await app.request("/orders", json(buyerToken, { productId: productE }), env);
@@ -903,7 +937,9 @@ async function main(): Promise<void> {
     assert(heldD.order.escrowStatus === "held", "pesapal order held after IPN");
     assert((heldD.product as { status: string }).status === "sold", "pesapal product sold");
 
-    // Confirm + release: seller credit = 150 (buyer paid the delivery fee)
+    // Confirm + release: artisan credit = 150 (buyer paid the delivery fee)
+    const readyD = await app.request(`/orders/${orderD.order.id}/mark-ready`, authedPost(artisanToken), env);
+    assert(readyD.status === 200, `mark-ready D failed with ${readyD.status}`);
     await app.request(
       `/orders/${orderD.order.id}/confirm-delivery`,
       json(buyerToken, { received: true, rating: 5 }),
@@ -911,12 +947,12 @@ async function main(): Promise<void> {
     );
     const confirmD = await app.request(
       `/orders/${orderD.order.id}/confirm-delivery`,
-      json(sellerToken, { received: true, rating: 5 }),
+      json(artisanToken, { received: true, rating: 5 }),
       env,
     );
     assert(confirmD.status === 200, `confirm D failed with ${confirmD.status}`);
-    sellerWallet = await wallet(sellerToken);
-    assert(sellerWallet.walletBalance === 93000 + 150, `seller balance should be 93150, got ${sellerWallet.walletBalance}`);
+    artisanWallet = await wallet(artisanToken);
+    assert(artisanWallet.walletBalance === 93000 + 150, `artisan balance should be 93150, got ${artisanWallet.walletBalance}`);
 
     // IPN FAILED (status_code 2) -> order failed, product active
     pesapalStatusByTracking.set("tracking-2", 2);
@@ -927,22 +963,22 @@ async function main(): Promise<void> {
     assert((failedE.product as { status: string }).status === "active", "pesapal product back to active");
 
     // ---- E0. Concurrent release is idempotent (CAS gate) ----------------------
-    const productR = await createProduct(sellerToken, { title: "Race release", priceAmount: 20000 });
+    const productR = await createProduct(artisanToken, { title: "Race release", priceAmount: 20000 });
     await reserve(buyerToken, productR);
     const createR = await app.request("/orders", json(buyerToken, { productId: productR, phoneNumber: "0788123456" }), env);
     const orderR = ((await createR.json()) as { order: Order & { id: string } }).order;
     await paypackWebhook({ ref: orderR.paymentReference, status: "successful", kind: "CASHIN" });
 
-    // Three parties (buyer retry, seller, admin) all try to release at once.
-    const beforeRace = (await db.getDoc<User>(`${collections.users}/seller-1`))!.walletBalance;
+    // Three parties (buyer retry, artisan, admin) all try to release at once.
+    const beforeRace = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
     const raceResults = await Promise.all([
-      releaseToSeller(env as never, (await getOrder(buyerToken, orderR.id)).order),
-      releaseToSeller(env as never, (await getOrder(buyerToken, orderR.id)).order),
-      releaseToSeller(env as never, (await getOrder(buyerToken, orderR.id)).order),
+      releaseToArtisan(env as never, (await getOrder(buyerToken, orderR.id)).order),
+      releaseToArtisan(env as never, (await getOrder(buyerToken, orderR.id)).order),
+      releaseToArtisan(env as never, (await getOrder(buyerToken, orderR.id)).order),
     ]);
     assert(raceResults.filter(Boolean).length === 1, "exactly one concurrent release wins");
-    const afterRace = (await db.getDoc<User>(`${collections.users}/seller-1`))!.walletBalance;
-    assert(afterRace === beforeRace + 20000, "seller credited exactly once");
+    const afterRace = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    assert(afterRace === beforeRace + 20000, "artisan credited exactly once");
     const raceTxs = await db.queryCollection<WalletTransaction>(collections.walletTransactions, {
       filters: [
         { field: "orderId", op: "==", value: orderR.id },
@@ -954,7 +990,7 @@ async function main(): Promise<void> {
     assert(racedOrder.order.escrowStatus === "released", "order released once");
 
     // ---- E. Auto-refund: Paypack cashout (refunded) --------------------------
-    const productF = await createProduct(sellerToken, { title: "Auto refund RWF", priceAmount: 10000 });
+    const productF = await createProduct(artisanToken, { title: "Auto refund RWF", priceAmount: 10000 });
     await reserve(buyerToken, productF);
     const createF = await app.request("/orders", json(buyerToken, { productId: productF, phoneNumber: "0788123456" }), env);
     const orderF = ((await createF.json()) as { order: Order & { id: string } }).order;
@@ -966,13 +1002,13 @@ async function main(): Promise<void> {
     assert(paypackResult.refunded === 1, "one paypack order refunded");
     assert(paypackCashouts.length === 1, "cashout issued for refund");
     assert(paypackCashouts[0]!.idempotencyKey === orderF.id, "refund cashout idempotency key = order id");
-    assert(paypackCashouts[0]!.amount === 10000, "refund amount = totalPaid");
+    assert(paypackCashouts[0]!.amount as number === 10000, "refund amount = totalPaid");
     const refundedF = await getOrder(buyerToken, orderF.id);
     assert(refundedF.order.escrowStatus === "refunded", "paypack order refunded");
     assert((refundedF.product as { status: string }).status === "active", "refunded product back to active");
 
     // ---- F. Auto-refund: Pesapal refund request (refund_requested) -----------
-    const productG = await createProduct(sellerToken, {
+    const productG = await createProduct(artisanToken, {
       title: "Auto refund USD",
       priceAmount: 300,
       priceCurrency: "USD",
@@ -1009,44 +1045,297 @@ async function main(): Promise<void> {
     const unauthWithdraw = await app.request("/wallet/withdraw", { method: "POST" }, env);
     assert(unauthWithdraw.status === 401, `unauth withdraw should be 401, got ${unauthWithdraw.status}`);
 
-    sellerWallet = await wallet(sellerToken);
-    const preWithdrawBalance = sellerWallet.walletBalance;
+    artisanWallet = await wallet(artisanToken);
+    const preWithdrawBalance = artisanWallet.walletBalance;
     assert(preWithdrawBalance === 113150, `pre-withdraw balance should be 113150, got ${preWithdrawBalance}`);
-    assert(sellerWallet.transactions.length >= 3, "transaction history includes credits");
+    assert(artisanWallet.transactions.length >= 3, "transaction history includes credits");
 
-    const tooBig = await app.request("/wallet/withdraw", json(sellerToken, { amount: 999999, phoneNumber: "0788123456" }), env);
+    const tooBig = await app.request("/wallet/withdraw", json(artisanToken, { amount: 999999, phoneNumber: "0788123456" }), env);
     assert(tooBig.status === 400, `over-balance withdraw should be 400, got ${tooBig.status}`);
 
-    const badPhone = await app.request("/wallet/withdraw", json(sellerToken, { amount: 100, phoneNumber: "abc" }), env);
+    const badPhone = await app.request("/wallet/withdraw", json(artisanToken, { amount: 100, phoneNumber: "abc" }), env);
     assert(badPhone.status === 400, `bad phone should be 400, got ${badPhone.status}`);
 
     paypackCashouts.length = 0;
-    const withdrawRes = await app.request("/wallet/withdraw", json(sellerToken, { amount: 30000, phoneNumber: "0788123456" }), env);
+    const withdrawRes = await app.request("/wallet/withdraw", json(artisanToken, { amount: 30000, phoneNumber: "0788123456" }), env);
     assert(withdrawRes.status === 200, `withdraw failed with ${withdrawRes.status}`);
     const withdrawBody = (await withdrawRes.json()) as { transaction: { id: string; type: string }; walletBalance: number };
     assert(withdrawBody.transaction.type === "debit", "withdrawal is a debit");
     assert(withdrawBody.walletBalance === 83150, "balance debited");
     assert(paypackCashouts.length === 1, "withdrawal triggers a cashout");
     assert(
-      paypackCashouts[0]!.idempotencyKey === `withdraw-seller-1-${withdrawBody.transaction.id}`,
+      paypackCashouts[0]!.idempotencyKey === `withdraw-artisan-1-${withdrawBody.transaction.id}`,
       "withdraw idempotency key = withdraw-{uid}-{txId}",
     );
 
-    const afterWithdraw = await wallet(sellerToken);
+    const afterWithdraw = await wallet(artisanToken);
     assert(afterWithdraw.walletBalance === 83150, "wallet reflects withdrawal");
     assert(afterWithdraw.transactions[0]!.type === "debit", "debit is newest transaction");
 
     // Cashout failure restores the balance and reclassifies the transaction.
     paypackCashoutShouldFail = true;
-    const failWithdraw = await app.request("/wallet/withdraw", json(sellerToken, { amount: 5000, phoneNumber: "0788123456" }), env);
+    const failWithdraw = await app.request("/wallet/withdraw", json(artisanToken, { amount: 5000, phoneNumber: "0788123456" }), env);
     assert(failWithdraw.status === 502, `failed cashout should be 502, got ${failWithdraw.status}`);
     paypackCashoutShouldFail = false;
-    const restored = await wallet(sellerToken);
+    const restored = await wallet(artisanToken);
     assert(restored.walletBalance === 83150, "balance restored after failed cashout");
     assert(restored.transactions[0]!.type === "refund", "failed withdrawal reclassified to refund");
 
+    // ---- H. Made-to-order: deposit plan + customization + reference brief -----
+    paypackCashouts.length = 0;
+
+    // The product list needs an estimated production time.
+    const noTime = await app.request(
+      "/products",
+      json(artisanToken, {
+        title: "No production time",
+        description: "Missing the made-to-order estimate.",
+        category: "Pottery",
+        priceAmount: 100,
+        priceCurrency: "RWF",
+        isNegotiable: false,
+        isBiddingEnabled: false,
+        conditionNote: "",
+        images: ["uploads/artisan-1/img.jpg"],
+        videoUrl: null,
+        deliveryFee: 0,
+        deliveryFeePayer: "artisan",
+      }),
+      env,
+    );
+    assert(noTime.status === 400, `missing productionTimeDays should be 400, got ${noTime.status}`);
+
+    const customProduct = await createProduct(artisanToken, {
+      title: "Custom Agaseke basket",
+      priceAmount: 40000,
+      productionTimeDays: 5,
+      isCustomizable: true,
+      allowsReferenceUpload: true,
+      customizationOptions: [
+        { id: "size", type: "choice", label: "Size", required: true, priceAdjustment: 5000, choices: ["Small", "Large"] },
+        { id: "engraving", type: "text", label: "Engraving", required: false, priceAdjustment: 2000 },
+        { id: "fabric", type: "image_upload", label: "Fabric reference", required: false, priceAdjustment: 0 },
+      ],
+    });
+    await reserve(buyerToken, customProduct);
+
+    // Required customization answers are enforced before an order is created.
+    const missingRequired = await app.request(
+      "/orders",
+      json(buyerToken, { productId: customProduct, phoneNumber: "0788123456", paymentPlan: "deposit", customizationResponses: [] }),
+      env,
+    );
+    assert(missingRequired.status === 400, `missing required customization should be 400, got ${missingRequired.status}`);
+    const badChoice = await app.request(
+      "/orders",
+      json(buyerToken, {
+        productId: customProduct,
+        phoneNumber: "0788123456",
+        paymentPlan: "deposit",
+        customizationResponses: [{ optionId: "size", value: "Gigantic" }],
+      }),
+      env,
+    );
+    assert(badChoice.status === 400, `invalid choice should be 400, got ${badChoice.status}`);
+
+    const createH = await app.request(
+      "/orders",
+      json(buyerToken, {
+        productId: customProduct,
+        phoneNumber: "0788123456",
+        paymentPlan: "deposit",
+        customizationResponses: [
+          { optionId: "size", value: "Large" },
+          { optionId: "engraving", value: "For Mutesi" },
+        ],
+        referenceImageUrl: "uploads/buyer-1/ref.jpg",
+        customRequestNote: "Please match the pattern in the photo.",
+      }),
+      env,
+    );
+    assert(createH.status === 200, `deposit order failed with ${createH.status}`);
+    const orderH = ((await createH.json()) as { order: Order & { id: string } }).order;
+    assert(orderH.paymentPlan === "deposit", "deposit plan stored");
+    assert(orderH.agreedAmount === 47000, "price adjustments added (40000 + 5000 + 2000)");
+    assert(orderH.totalPaid === 47000, "no delivery fee on this piece");
+    assert(orderH.depositAmount === 23500, "deposit = 50% of total");
+    assert(orderH.finalAmount === 23500, "remaining = 50% of total");
+    assert(orderH.productionStatus === "pending_deposit", "starts pending_deposit");
+    assert(orderH.customizationResponses.length === 2, "customization answers stored");
+    assert(orderH.referenceImageUrl === "uploads/buyer-1/ref.jpg", "reference image stored");
+    assert(orderH.customRequestNote === "Please match the pattern in the photo.", "custom note stored");
+    assert(paypackCashins.at(-1)!.amount === 23500, "only the deposit is charged up front");
+
+    await paypackWebhook({ ref: orderH.paymentReference, status: "successful", kind: "CASHIN" });
+    const heldH = await getOrder(buyerToken, orderH.id);
+    assert(heldH.order.escrowStatus === "held", "deposit held in escrow");
+    assert(heldH.order.depositPaid === true, "depositPaid set");
+    assert(heldH.order.finalPaid === false, "final payment still pending");
+    assert(heldH.order.productionStatus === "in_production", "in production after deposit");
+
+    // Buyer requests cancellation while in production; artisan rejects -> work continues.
+    const reqCancelH = await app.request(
+      `/orders/${orderH.id}/request-cancellation`,
+      json(buyerToken, { reason: "Changed my mind" }),
+      env,
+    );
+    assert(reqCancelH.status === 200, `request-cancellation failed with ${reqCancelH.status}`);
+    const reqH = (await reqCancelH.json()) as { order: Order & { id: string } };
+    assert(reqH.order.cancellationRequest?.artisanDecision === "pending", "cancellation request pending");
+    const duplicateCancel = await app.request(
+      `/orders/${orderH.id}/request-cancellation`,
+      json(buyerToken, { reason: "Again" }),
+      env,
+    );
+    assert(duplicateCancel.status === 409, "only one open cancellation request");
+    const strangerCancel = await app.request(
+      `/orders/${orderH.id}/respond-cancellation`,
+      json(strangerToken, { accept: true }),
+      env,
+    );
+    assert(strangerCancel.status === 403, "only the artisan can respond");
+    const rejectH = await app.request(
+      `/orders/${orderH.id}/respond-cancellation`,
+      json(artisanToken, { accept: false }),
+      env,
+    );
+    assert(rejectH.status === 200, `reject cancellation failed with ${rejectH.status}`);
+    const rejectedH = (await rejectH.json()) as { order: Order & { id: string } };
+    assert(rejectedH.order.productionStatus === "in_production", "reject keeps production going");
+    assert(rejectedH.order.cancellationRequest?.artisanDecision === "rejected", "rejection recorded");
+
+    // Artisan finishes -> deposit plan waits for the remaining balance.
+    const readyH = await app.request(`/orders/${orderH.id}/mark-ready`, authedPost(artisanToken), env);
+    assert(readyH.status === 200, `mark-ready H failed with ${readyH.status}`);
+    const awaitingH = (await readyH.json()) as { order: Order & { id: string } };
+    assert(awaitingH.order.productionStatus === "awaiting_final_payment", "deposit plan waits for final payment");
+    assert(awaitingH.order.deliveryDeadline === "", "no delivery window until final payment");
+
+    const lateCancel = await app.request(
+      `/orders/${orderH.id}/request-cancellation`,
+      json(buyerToken, { reason: "too late now" }),
+      env,
+    );
+    assert(lateCancel.status === 409, "cannot cancel after the piece is ready");
+
+    // Buyer pays the remaining balance; webhook starts the delivery window.
+    const payFinalH = await app.request(`/orders/${orderH.id}/pay-final`, json(buyerToken, {}), env);
+    assert(payFinalH.status === 200, `pay-final failed with ${payFinalH.status}`);
+    const finalRefH = ((await payFinalH.json()) as { order: Order & { id: string } }).order.finalPaymentReference;
+    assert(typeof finalRefH === "string" && finalRefH.endsWith("-final"), "final reference suffixed -final");
+    assert(paypackCashins.at(-1)!.amount === 23500, "final charge = remaining balance");
+    const cashinsBeforeDouble = paypackCashins.length;
+    const doubleFinal = await app.request(`/orders/${orderH.id}/pay-final`, json(buyerToken, {}), env);
+    assert(doubleFinal.status === 200, "second pay-final is idempotent (200)");
+    assert(paypackCashins.length === cashinsBeforeDouble, "no extra charge while final payment is in flight");
+    await paypackWebhook({ ref: finalRefH!, status: "successful", kind: "CASHIN" });
+    const afterFinalH = await getOrder(buyerToken, orderH.id);
+    assert(afterFinalH.order.finalPaid === true, "finalPaid set after final webhook");
+    assert(afterFinalH.order.productionStatus === "awaiting_delivery", "awaiting delivery after final payment");
+    assert(afterFinalH.order.deliveryDeadline.length > 0, "delivery window starts after final payment");
+
+    // Delivery confirmation releases the full agreed amount to the artisan.
+    const beforeReleaseH = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    await app.request(
+      `/orders/${orderH.id}/confirm-delivery`,
+      json(buyerToken, { received: true, rating: 5 }),
+      env,
+    );
+    const confirmArtisanH = await app.request(
+      `/orders/${orderH.id}/confirm-delivery`,
+      json(artisanToken, { received: true, rating: 5 }),
+      env,
+    );
+    assert(confirmArtisanH.status === 200, `delivery release H failed with ${confirmArtisanH.status}`);
+    const afterReleaseH = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    assert(afterReleaseH === beforeReleaseH + 47000, "artisan credited the full agreed amount");
+
+    // ---- H2. Cancellation accepted on a deposit order: 50/50 deposit split ----
+    const cancelProduct = await createProduct(artisanToken, { title: "Cancel deposit", priceAmount: 20000 });
+    await reserve(buyerToken, cancelProduct);
+    const createCi = await app.request(
+      "/orders",
+      json(buyerToken, { productId: cancelProduct, phoneNumber: "0788123456", paymentPlan: "deposit" }),
+      env,
+    );
+    const orderCi = ((await createCi.json()) as { order: Order & { id: string } }).order;
+    await paypackWebhook({ ref: orderCi.paymentReference, status: "successful", kind: "CASHIN" });
+    const beforeCi = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    paypackCashouts.length = 0;
+    await app.request(
+      `/orders/${orderCi.id}/request-cancellation`,
+      json(buyerToken, { reason: "No longer needed" }),
+      env,
+    );
+    const acceptCi = await app.request(
+      `/orders/${orderCi.id}/respond-cancellation`,
+      json(artisanToken, { accept: true }),
+      env,
+    );
+    assert(acceptCi.status === 200, `accept cancellation failed with ${acceptCi.status}`);
+    const afterCi = await getOrder(buyerToken, orderCi.id);
+    assert(afterCi.order.productionStatus === "cancelled_by_mutual_agreement", "mutual cancellation status");
+    assert(afterCi.order.cancellationRequest?.artisanDecision === "accepted", "acceptance recorded");
+    assert(paypackCashouts.length === 1 && (paypackCashouts[0]!.amount as number) === 5000, "buyer refunded half the deposit");
+    const afterCiWallet = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    assert(afterCiWallet === beforeCi + 5000, "artisan keeps half the deposit as compensation");
+    const relistedCi = await db.getDoc<Product>(`${collections.products}/${cancelProduct}`);
+    assert(relistedCi!.status === "active", "product relisted after mutual cancellation");
+
+    // ---- H3. Cancellation accepted on a full-prepay order: 25/75 split --------
+    const fullCancelProduct = await createProduct(artisanToken, { title: "Cancel full", priceAmount: 20000 });
+    await reserve(buyerToken, fullCancelProduct);
+    const createCf = await app.request(
+      "/orders",
+      json(buyerToken, { productId: fullCancelProduct, phoneNumber: "0788123456", paymentPlan: "full" }),
+      env,
+    );
+    const orderCf = ((await createCf.json()) as { order: Order & { id: string } }).order;
+    await paypackWebhook({ ref: orderCf.paymentReference, status: "successful", kind: "CASHIN" });
+    const beforeCf = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    paypackCashouts.length = 0;
+    await app.request(
+      `/orders/${orderCf.id}/request-cancellation`,
+      json(buyerToken, { reason: "Changed plans" }),
+      env,
+    );
+    const acceptCf = await app.request(
+      `/orders/${orderCf.id}/respond-cancellation`,
+      json(artisanToken, { accept: true }),
+      env,
+    );
+    assert(acceptCf.status === 200, `accept full cancellation failed with ${acceptCf.status}`);
+    // Held = 20000: artisan keeps 25% (5000), buyer gets the other 75% (15000).
+    assert(paypackCashouts.length === 1 && (paypackCashouts[0]!.amount as number) === 15000, "buyer refunded 75% on full plan");
+    const afterCfWallet = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    assert(afterCfWallet === beforeCf + 5000, "artisan keeps 25% on full plan");
+
+    // ---- H4. Final-payment timeout forfeits the deposit -----------------------
+    const forfeitProduct = await createProduct(artisanToken, { title: "Forfeit deposit", priceAmount: 20000 });
+    await reserve(buyerToken, forfeitProduct);
+    const createHf = await app.request(
+      "/orders",
+      json(buyerToken, { productId: forfeitProduct, phoneNumber: "0788123456", paymentPlan: "deposit" }),
+      env,
+    );
+    const orderHf = ((await createHf.json()) as { order: Order & { id: string } }).order;
+    await paypackWebhook({ ref: orderHf.paymentReference, status: "successful", kind: "CASHIN" });
+    await app.request(`/orders/${orderHf.id}/mark-ready`, authedPost(artisanToken), env);
+    await db.updateDoc<Order>(`${collections.orders}/${orderHf.id}`, {
+      productionStatusAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    const beforeHf = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    const forfeitResult = await processExpiredOrders(env as never);
+    assert(forfeitResult.forfeited >= 1, "at least one order forfeited");
+    const forfeitedHf = await getOrder(buyerToken, orderHf.id);
+    assert(forfeitedHf.order.productionStatus === "cancelled_forfeited", "forfeited status");
+    const afterHf = (await db.getDoc<User>(`${collections.users}/artisan-1`))!.walletBalance;
+    assert(afterHf === beforeHf + 10000, "artisan keeps the forfeited deposit");
+    const relistedHf = await db.getDoc<Product>(`${collections.products}/${forfeitProduct}`);
+    assert(relistedHf!.status === "active", "product relisted after forfeiture");
+
     console.log(
-      "ORDER TESTS PASSED (escrow lifecycle, paypack webhooks + signature, pesapal IPN, delivery release math, auto-refund, wallet withdraw)",
+      "ORDER TESTS PASSED (escrow lifecycle, paypack webhooks + signature, pesapal IPN, delivery release math, auto-refund, wallet withdraw, made-to-order deposit/final, customization, cancellation split, forfeiture)",
     );
   } finally {
     jwksServer.close();

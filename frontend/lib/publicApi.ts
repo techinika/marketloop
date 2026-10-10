@@ -61,8 +61,22 @@ export async function publicFetch<T>(path: string, init: RequestInit = {}): Prom
   return (await res.json()) as T;
 }
 
-/** Worker-relative media URL for an R2 object key (see GET /media/*). */
+/** Worker-relative media URL for an R2 object key (see GET /media/*).
+ *
+ * Real listings store R2 object keys (e.g. `uploads/{uid}/{uuid}.jpg`), which
+ * are prefixed with the API media route. Already-resolvable sources — absolute
+ * URLs (seeded/demo data), inline `data:`/`blob:` URIs, and root-relative
+ * public assets — are returned unchanged so they render without mangling. */
 export function mediaUrl(key: string): string {
+  if (
+    key.startsWith("http://") ||
+    key.startsWith("https://") ||
+    key.startsWith("data:") ||
+    key.startsWith("blob:") ||
+    key.startsWith("/")
+  ) {
+    return key;
+  }
   return `${apiBaseUrl}/media/${key}`;
 }
 

@@ -2,7 +2,7 @@ import DOMPurify from "isomorphic-dompurify";
 
 /**
  * Safe server + client sanitizer for listing descriptions. Descriptions are
- * seller-authored HTML from the WYSIWYG editor, so every render path must go
+ * artisan-authored HTML from the WYSIWYG editor, so every render path must go
  * through here before `dangerouslySetInnerHTML`. The allowlist mirrors what the
  * editor can actually emit (Tiptap StarterKit + Link): text formatting, lists,
  * headings, quotes, code blocks and links.

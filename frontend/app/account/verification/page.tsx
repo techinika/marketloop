@@ -200,7 +200,7 @@ export default function VerificationPage() {
         <EmptyState
           icon="inbox"
           title="Sign in to verify your identity"
-          description="Verify your phone and ID to build trust with buyers and sellers."
+          description="Verify your phone and ID to build trust with buyers and artisans."
         >
           <Link href="/" className="btn btn-primary">
             Sign in
@@ -245,7 +245,7 @@ export default function VerificationPage() {
             {phoneVerified ? (
               <p className="mt-3 text-sm leading-6 text-secondary">
                 Your number was confirmed{formatDate(state?.phoneVerifiedAt) ? ` on ${formatDate(state?.phoneVerifiedAt)}` : ""}.
-                Sellers with a verified phone show a badge on their listings.
+                Artisans with a verified phone show a badge on their listings.
               </p>
             ) : (
               <>
@@ -384,7 +384,7 @@ export default function VerificationPage() {
           <ul className="mt-3 flex flex-col gap-3 text-sm leading-6 text-secondary">
             <li className="flex gap-2">
               <span className="mt-2 size-1.5 shrink-0 rounded-full bg-accent" aria-hidden="true" />
-              Verified sellers show a badge, so buyers trust your listings.
+              Verified artisans show a badge, so buyers trust your listings.
             </li>
             <li className="flex gap-2">
               <span className="mt-2 size-1.5 shrink-0 rounded-full bg-accent" aria-hidden="true" />

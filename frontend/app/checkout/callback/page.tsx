@@ -119,7 +119,7 @@ export default function CheckoutCallbackPage({
                   <span className="font-semibold text-foreground">
                     {formatPrice(order.totalPaid, order.currency)}
                   </span>
-                  . The seller will be paid once delivery is confirmed.
+                  . The artisan will be paid once delivery is confirmed.
                 </>
               )}
             </p>

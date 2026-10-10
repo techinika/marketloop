@@ -2,11 +2,29 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { ExploreFeed } from "@/components/ExploreFeed";
-import { filtersFromParams } from "@/lib/exploreFilters";
+import { filtersFromParams, type ExploreFilters } from "@/lib/exploreFilters";
 import { fetchFeed } from "@/lib/products";
+import { DUMMY_PRODUCTS } from "@/lib/dummyData";
 import { ExploreSkeleton } from "@/components/ui/Skeleton";
+import type { ProductFeed } from "@/types";
 
 export const dynamic = "force-dynamic";
+
+/** True when the visitor hasn't narrowed the feed with any filter. */
+function isUnfiltered(f: ExploreFilters): boolean {
+  return (
+    f.search === "" &&
+    f.category === "" &&
+    f.currency === "" &&
+    !f.biddingOnly &&
+    f.priceMin === "" &&
+    f.priceMax === "" &&
+    f.productType === "" &&
+    f.tags === "" &&
+    f.materials === "" &&
+    f.region === ""
+  );
+}
 
 /**
  * SEO note: filtered /explore pages (e.g. ?category=Fashion) share a single
@@ -19,15 +37,15 @@ export async function generateMetadata({
   searchParams: Promise<{ q?: string }>;
 }): Promise<Metadata> {
   const { q } = await searchParams;
-  const title = q ? `Search: ${q} — ALLSHA` : "Explore second-hand goods — ALLSHA";
+  const title = q ? `Search: ${q}` : "Discover handmade Rwandan craft";
   return {
     title,
     description:
-      "Browse used phones, electronics, furniture and more in Rwanda. Every payment is held in escrow until delivery is confirmed.",
+      "Browse handmade Rwandan craft — baskets, Imigongo art, wood carvings, jewelry and textiles. Made to order or ready to ship, straight from the artisan.",
     alternates: { canonical: "/explore" },
     openGraph: {
       title,
-      description: "Browse used goods in Rwanda with escrow-protected payments.",
+      description: "Discover handmade Rwandan craft and commissioned art.",
       type: "website",
       url: "/explore",
     },
@@ -47,7 +65,7 @@ export default async function ExplorePage({
   }
   const filters = filtersFromParams(sp);
 
-  let initial = null;
+  let initial: ProductFeed | null = null;
   try {
     initial = await fetchFeed({
       search: filters.search || undefined,
@@ -62,6 +80,17 @@ export default async function ExplorePage({
   } catch {
     // API unreachable at request time — the client feed retries on mount.
     initial = null;
+  }
+
+  // Show demo pieces only when nothing filtered came back from the database,
+  // so the marketplace never looks broken while it's still filling up.
+  if (isUnfiltered(filters) && (!initial || initial.products.length === 0)) {
+    initial = {
+      products: DUMMY_PRODUCTS,
+      page: 1,
+      pageSize: DUMMY_PRODUCTS.length,
+      hasMore: false,
+    };
   }
 
   return (

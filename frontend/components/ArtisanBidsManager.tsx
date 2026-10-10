@@ -7,21 +7,21 @@ import type { User as FirebaseUser } from "firebase/auth";
 
 import { formatPrice } from "@/lib/api";
 import { observeAuthState } from "@/lib/firebase";
-import { acceptBid, fetchProduct, fetchSellerBids } from "@/lib/products";
-import type { Product, SellerBidRow } from "@/types";
+import { acceptBid, fetchProduct, fetchArtisanBids } from "@/lib/products";
+import type { Product, ArtisanBidRow } from "@/types";
 import { useToast } from "@/components/ui/Toast";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListRowSkeleton } from "@/components/ui/Skeleton";
 import { RatingBadge } from "@/components/ui/Rating";
 
-export function SellerBidsManager() {
+export function ArtisanBidsManager() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const { toast } = useToast();
 
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [product, setProduct] = useState<Product | null>(null);
-  const [bids, setBids] = useState<SellerBidRow[] | null>(null);
+  const [bids, setBids] = useState<ArtisanBidRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -42,7 +42,7 @@ export function SellerBidsManager() {
       setError(null);
       try {
         const detail = await fetchProduct(id);
-        const rows = await fetchSellerBids(id);
+        const rows = await fetchArtisanBids(id);
         if (cancelled) return;
         setProduct(detail.product);
         setBids(rows);
@@ -66,7 +66,7 @@ export function SellerBidsManager() {
       setBids([]);
       toast({
         title: "Offer accepted",
-        description: `${formatPrice(checkout.amount, checkout.currency)} — the item is reserved while the buyer pays.`,
+        description: `${formatPrice(checkout.amount, checkout.currency)} — the item is reserved while the customer pays.`,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to accept offer");
@@ -114,7 +114,7 @@ export function SellerBidsManager() {
         </div>
       ) : product?.status === "reserved" ? (
         <div className="card mt-6 bg-warning-soft p-4 text-sm text-warning">
-          This item is reserved. The buyer has time to pay; it will return to active if they
+          This item is reserved. The customer has time to pay; it will return to active if they
           don&apos;t.
         </div>
       ) : bids.length === 0 ? (
@@ -122,7 +122,7 @@ export function SellerBidsManager() {
           <EmptyState
             icon="search"
             title="No active offers"
-            description="When buyers make offers on this listing, they'll appear here sorted by amount."
+            description="When customers make offers on this listing, they'll appear here sorted by amount."
           />
         </div>
       ) : (

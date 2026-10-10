@@ -1,7 +1,5 @@
-import type { Order } from "@/types";
+import type { Order, ProductionStatus } from "@/types";
 import { cn } from "@/lib/cn";
-
-const PAID = new Set(["held", "released", "refunded", "refund_requested"]);
 
 type StepState = "done" | "current" | "upcoming" | "danger";
 
@@ -19,56 +17,33 @@ const ALERT_ICON = (
   </svg>
 );
 
-/**
- * Escrow lifecycle stepper: Payment secured → Delivery confirmed → Funds released.
- * Handles the dispute ("under review") and refund states introduced with the
- * delivery-confirmation flow.
- */
-export function StepTracker({ order }: { order: Order }) {
-  const paid = PAID.has(order.escrowStatus);
-  const hasDispute = order.hasDispute === true;
-  const bothConfirmed = order.buyerConfirmedDelivery && order.sellerConfirmedDelivery;
-  const released = order.escrowStatus === "released";
-  const refunding = order.escrowStatus === "refunded" || order.escrowStatus === "refund_requested";
+const PAID = new Set(["held", "released", "refunded", "refund_requested"]);
 
-  if (!paid) {
-    return (
-      <div className="rounded-card border border-border bg-background px-4 py-3 text-sm text-secondary">
-        Payment hasn&apos;t been secured yet — this order is awaiting payment.
-      </div>
-    );
+/** Milestone labels for the made-to-order lifecycle, by payment plan. */
+function productionMilestones(deposit: boolean): string[] {
+  return deposit
+    ? ["Deposit secured", "In production", "Ready — pay remaining", "Delivery confirmed", "Funds released"]
+    : ["Payment secured", "In production", "Ready for delivery", "Delivery confirmed", "Funds released"];
+}
+
+/** Maps a production status to per-milestone states (5 milestones). */
+function productionStates(ps: ProductionStatus, deposit: boolean): StepState[] {
+  const allDone: StepState[] = ["done", "done", "done", "done", "done"];
+  switch (ps) {
+    case "in_production":
+      return ["done", "current", "upcoming", "upcoming", "upcoming"];
+    case "awaiting_final_payment":
+      return ["done", "done", "current", "upcoming", "upcoming"];
+    case "awaiting_delivery":
+      return ["done", "done", "done", "current", "upcoming"];
+    case "released":
+      return allDone;
+    default:
+      return deposit ? ["done", "current", "upcoming", "upcoming", "upcoming"] : ["done", "current", "upcoming", "upcoming", "upcoming"];
   }
+}
 
-  let steps: Array<{ label: string; state: StepState }>;
-  if (hasDispute) {
-    steps = [
-      { label: "Payment secured", state: "done" },
-      {
-        label: "Delivery confirmed",
-        state: bothConfirmed ? "done" : "current",
-      },
-      { label: "Under review", state: "danger" },
-    ];
-  } else if (refunding) {
-    steps = [
-      { label: "Payment secured", state: "done" },
-      { label: "Delivery confirmed", state: "done" },
-      {
-        label: order.escrowStatus === "refunded" ? "Refunded" : "Refund requested",
-        state: order.escrowStatus === "refunded" ? "done" : "current",
-      },
-    ];
-  } else {
-    steps = [
-      { label: "Payment secured", state: "done" },
-      {
-        label: "Delivery confirmed",
-        state: bothConfirmed || released ? "done" : "current",
-      },
-      { label: "Funds released", state: released ? "done" : "upcoming" },
-    ];
-  }
-
+function renderSteps(steps: Array<{ label: string; state: StepState }>) {
   return (
     <ol className="flex items-center">
       {steps.map((step, index) => {
@@ -112,4 +87,89 @@ export function StepTracker({ order }: { order: Order }) {
       })}
     </ol>
   );
+}
+
+/**
+ * Order lifecycle stepper. New made-to-order orders run the production
+ * lifecycle (Deposit → In production → Ready → Delivery → Released); legacy
+ * orders without a production status fall back to the escrow tracker.
+ */
+export function StepTracker({ order }: { order: Order }) {
+  const ps = order.productionStatus;
+  const deposit = order.paymentPlan === "deposit";
+  const hasDispute = order.hasDispute === true;
+  const released = order.escrowStatus === "released";
+  const paid = PAID.has(order.escrowStatus);
+
+  // Terminal production states render a dedicated short tracker.
+  if (ps === "cancelled_by_mutual_agreement") {
+    return renderSteps([
+      { label: "Payment secured", state: "done" },
+      { label: "In production", state: "done" },
+      { label: "Cancelled (mutual)", state: "danger" },
+    ]);
+  }
+  if (ps === "cancelled_forfeited") {
+    return renderSteps([
+      { label: "Payment secured", state: "done" },
+      { label: "In production", state: "done" },
+      { label: "Deposit forfeited", state: "danger" },
+    ]);
+  }
+  if (ps === "refunded" || order.escrowStatus === "refunded") {
+    return renderSteps([
+      { label: "Payment secured", state: "done" },
+      { label: "Refunded", state: "done" },
+    ]);
+  }
+
+  if (ps === undefined) {
+    // Legacy escrow-only lifecycle (pre made-to-order).
+    const bothConfirmed = order.buyerConfirmedDelivery && order.artisanConfirmedDelivery;
+    if (!paid) {
+      return (
+        <div className="rounded-card border border-border bg-background px-4 py-3 text-sm text-secondary">
+          Payment hasn&apos;t been secured yet — this order is awaiting payment.
+        </div>
+      );
+    }
+    if (hasDispute) {
+      return renderSteps([
+        { label: "Payment secured", state: "done" },
+        { label: "Delivery confirmed", state: bothConfirmed ? "done" : "current" },
+        { label: "Under review", state: "danger" },
+      ]);
+    }
+    if (order.escrowStatus === "refund_requested") {
+      return renderSteps([
+        { label: "Payment secured", state: "done" },
+        { label: "Refund requested", state: "current" },
+      ]);
+    }
+    return renderSteps([
+      { label: "Payment secured", state: "done" },
+      { label: "Delivery confirmed", state: bothConfirmed || released ? "done" : "current" },
+      { label: "Funds released", state: released ? "done" : "upcoming" },
+    ]);
+  }
+
+  if (!paid) {
+    return (
+      <div className="rounded-card border border-border bg-background px-4 py-3 text-sm text-secondary">
+        Payment hasn&apos;t been secured yet — this order is awaiting payment.
+      </div>
+    );
+  }
+
+  if (hasDispute) {
+    return renderSteps([
+      { label: "Payment secured", state: "done" },
+      { label: "In production / delivery", state: ["released"].includes(ps) ? "done" : "current" },
+      { label: "Under review", state: "danger" },
+    ]);
+  }
+
+  const states = productionStates(ps, deposit);
+  const milestones = productionMilestones(deposit);
+  return renderSteps(milestones.map((label, index) => ({ label, state: states[index]! })));
 }

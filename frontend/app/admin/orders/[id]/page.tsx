@@ -115,7 +115,7 @@ export default function AdminOrderDetailPage() {
     );
   }
 
-  const { order, product, buyer, seller, transactions, messages } = data;
+  const { order, product, buyer, artisan, transactions, messages } = data;
   const canMarkRefunded = order.escrowStatus === "refund_requested";
   const canForceRelease = order.escrowStatus === "held";
 
@@ -175,7 +175,7 @@ export default function AdminOrderDetailPage() {
             </div>
             {order.buyerPhoneNumber && (
               <div className="flex justify-between">
-                <dt className="text-muted">Buyer phone</dt>
+                <dt className="text-muted">Customer phone</dt>
                 <dd className="font-medium text-foreground">{order.buyerPhoneNumber}</dd>
               </div>
             )}
@@ -198,12 +198,12 @@ export default function AdminOrderDetailPage() {
               <dd className="font-medium text-foreground">{formatDate(order.deliveryDeadline)}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-muted">Buyer confirmed</dt>
+              <dt className="text-muted">Customer confirmed</dt>
               <dd className="text-foreground">{order.buyerConfirmedDelivery ? "Yes" : "No"}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-muted">Seller confirmed</dt>
-              <dd className="text-foreground">{order.sellerConfirmedDelivery ? "Yes" : "No"}</dd>
+              <dt className="text-muted">Artisan confirmed</dt>
+              <dd className="text-foreground">{order.artisanConfirmedDelivery ? "Yes" : "No"}</dd>
             </div>
           </dl>
         </section>
@@ -233,7 +233,7 @@ export default function AdminOrderDetailPage() {
         </section>
 
         <section className="card p-5">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Buyer</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Customer</h2>
           <div className="mt-3 text-sm">
             <p className="font-medium text-foreground">{buyer?.name ?? "Unknown"}</p>
             <p className="text-muted">{buyer?.email ?? "—"}</p>
@@ -242,11 +242,11 @@ export default function AdminOrderDetailPage() {
         </section>
 
         <section className="card p-5">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Seller</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Artisan</h2>
           <div className="mt-3 text-sm">
-            <p className="font-medium text-foreground">{seller?.name ?? "Unknown"}</p>
-            <p className="text-muted">{seller?.email ?? "—"}</p>
-            <p className="mt-1 text-xs text-muted">{seller?.uid ?? ""}</p>
+            <p className="font-medium text-foreground">{artisan?.name ?? "Unknown"}</p>
+            <p className="text-muted">{artisan?.email ?? "—"}</p>
+            <p className="mt-1 text-xs text-muted">{artisan?.uid ?? ""}</p>
           </div>
         </section>
       </div>
@@ -257,7 +257,7 @@ export default function AdminOrderDetailPage() {
           <p className="mt-2 text-sm text-muted">
             {canMarkRefunded
               ? "Mark this refund_requested order as refunded (the provider refund was already issued)."
-              : "Force release these escrow funds to the seller without both-party confirmation."}
+              : "Force release these escrow funds to the artisan without both-party confirmation."}
           </p>
           <textarea
             value={note}
@@ -282,7 +282,7 @@ export default function AdminOrderDetailPage() {
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Feedback &amp; messages</h2>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
           <div className="rounded-xl border border-border bg-background p-3 text-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted">Buyer feedback (on seller)</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">Customer feedback (on artisan)</p>
             {order.buyerFeedback ? (
               <div className="mt-2">
                 <RatingBadge avgRating={order.buyerFeedback.rating} ratingCount={1} />
@@ -296,14 +296,14 @@ export default function AdminOrderDetailPage() {
             )}
           </div>
           <div className="rounded-xl border border-border bg-background p-3 text-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted">Seller feedback (on buyer)</p>
-            {order.sellerFeedback ? (
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">Artisan feedback (on customer)</p>
+            {order.artisanFeedback ? (
               <div className="mt-2">
-                <RatingBadge avgRating={order.sellerFeedback.rating} ratingCount={1} />
-                {order.sellerFeedback.comment && (
-                  <p className="mt-1.5 text-xs leading-5 text-secondary">&quot;{order.sellerFeedback.comment}&quot;</p>
+                <RatingBadge avgRating={order.artisanFeedback.rating} ratingCount={1} />
+                {order.artisanFeedback.comment && (
+                  <p className="mt-1.5 text-xs leading-5 text-secondary">&quot;{order.artisanFeedback.comment}&quot;</p>
                 )}
-                <p className="mt-1 text-xs text-muted">{formatDate(order.sellerFeedback.submittedAt)}</p>
+                <p className="mt-1 text-xs text-muted">{formatDate(order.artisanFeedback.submittedAt)}</p>
               </div>
             ) : (
               <p className="mt-2 text-xs text-muted">Not submitted.</p>
@@ -327,7 +327,7 @@ export default function AdminOrderDetailPage() {
                 >
                   <p className="whitespace-pre-wrap break-words">{m.text}</p>
                   <p className="mt-1 text-[10px] text-muted">
-                    {isBuyerMsg ? buyer?.name ?? "Buyer" : seller?.name ?? "Seller"} ·{" "}
+                    {isBuyerMsg ? buyer?.name ?? "Customer" : artisan?.name ?? "Artisan"} ·{" "}
                     {formatDate(m.createdAt)}
                   </p>
                 </li>

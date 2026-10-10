@@ -282,16 +282,23 @@ async function createProduct(
     json(token, {
       title: "Bid test item",
       description: "An item used to test bidding.",
-      category: "Electronics",
+      category: "Pottery",
       priceAmount: 50000,
       priceCurrency: "RWF",
       isNegotiable: true,
       isBiddingEnabled: true,
       conditionNote: "like new",
-      images: ["uploads/seller-1/img.jpg"],
+      images: ["uploads/artisan-1/img.jpg"],
       videoUrl: null,
       deliveryFee: 0,
-      deliveryFeePayer: "seller",
+      deliveryFeePayer: "artisan",
+      productType: "made_to_order",
+      tags: [],
+      materials: [],
+      region: null,
+      acceptingOrders: true,
+      maxConcurrentOrders: null,
+      productionTimeDays: 7,
       ...overrides,
     }),
     env,
@@ -335,7 +342,7 @@ async function main(): Promise<void> {
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-      R2_BUCKET_NAME: "allsha-images",
+      R2_BUCKET_NAME: "handi-assets",
       FIREBASE_PROJECT_ID: PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: "test@example.com",
       FIREBASE_PRIVATE_KEY: "test-key",
@@ -356,8 +363,8 @@ async function main(): Promise<void> {
       iat: now - 60,
       exp: now + 3600,
     };
-    const sellerToken = await mintToken(
-      { ...claims, sub: "seller-1", name: "Seller", email: "seller@example.com", picture: "https://example.com/s.png" },
+    const artisanToken = await mintToken(
+      { ...claims, sub: "artisan-1", name: "Artisan", email: "artisan@example.com", picture: "https://example.com/s.png" },
       privateKey,
     );
     const buyerToken = await mintToken(
@@ -377,7 +384,7 @@ async function main(): Promise<void> {
       accessTokenProvider: async () => "test-access-token",
     });
     for (const u of [
-      { uid: "seller-1", name: "Seller", email: "seller@example.com", photoUrl: "https://example.com/s.png" },
+      { uid: "artisan-1", name: "Artisan", email: "artisan@example.com", photoUrl: "https://example.com/s.png" },
       { uid: "buyer-1", name: "Buyer One", email: "buyer1@example.com", photoUrl: "https://example.com/b1.png" },
       { uid: "buyer-2", name: "Buyer Two", email: "buyer2@example.com", photoUrl: "https://example.com/b2.png" },
     ]) {
@@ -393,8 +400,8 @@ async function main(): Promise<void> {
       });
     }
 
-    const biddingProductId = await createProduct(env, sellerToken, { isBiddingEnabled: true });
-    const nonBiddingProductId = await createProduct(env, sellerToken, {
+    const biddingProductId = await createProduct(env, artisanToken, { isBiddingEnabled: true });
+    const nonBiddingProductId = await createProduct(env, artisanToken, {
       isBiddingEnabled: false,
       title: "Direct buy item",
     });
@@ -407,10 +414,10 @@ async function main(): Promise<void> {
     );
     assert(bidOnNonBidding.status === 400, `expected 400 on non-bidding product, got ${bidOnNonBidding.status}`);
 
-    // 2. Seller cannot bid on their own product.
+    // 2. Artisan cannot bid on their own product.
     const selfBid = await app.request(
       `/products/${biddingProductId}/bids`,
-      json(sellerToken, { amount: 100, currency: "RWF" }),
+      json(artisanToken, { amount: 100, currency: "RWF" }),
       env,
     );
     assert(selfBid.status === 400, `expected 400 for self-bid, got ${selfBid.status}`);
@@ -454,10 +461,10 @@ async function main(): Promise<void> {
     const mine = (await mineRes.json()) as { bid: (Bid & { id: string }) | null };
     assert(mine.bid?.id === buyerBidId, "bids/mine should return own bid");
 
-    // 8. Second buyer bids higher; seller's all-view is sorted highest first.
+    // 8. Second buyer bids higher; artisan's all-view is sorted highest first.
     await app.request(`/products/${biddingProductId}/bids`, json(buyer2Token, { amount: 50000, currency: "RWF" }), env);
 
-    const allRes = await app.request(`/products/${biddingProductId}/bids/all`, bearer(sellerToken), env);
+    const allRes = await app.request(`/products/${biddingProductId}/bids/all`, bearer(artisanToken), env);
     assert(allRes.status === 200, `expected 200 for bids/all, got ${allRes.status}`);
     const all = (await allRes.json()) as {
       bids: Array<{ id: string; amount: number; createdAt: string; buyer: { uid: string; name: string; photoUrl: string | null } }>;
@@ -469,7 +476,7 @@ async function main(): Promise<void> {
     assert(!("email" in all.bids[0]!.buyer), "bidder email leaked");
 
     const buyerCantView = await app.request(`/products/${biddingProductId}/bids/all`, bearer(buyerToken), env);
-    assert(buyerCantView.status === 403, `expected 403 for non-seller bids/all, got ${buyerCantView.status}`);
+    assert(buyerCantView.status === 403, `expected 403 for non-artisan bids/all, got ${buyerCantView.status}`);
 
     // 9. Withdraw own bid; other user cannot withdraw it.
     const withdrawRes = await app.request(`/bids/${buyerBidId}/withdraw`, authedPost(buyerToken), env);
@@ -493,7 +500,7 @@ async function main(): Promise<void> {
     const replacedBid = ((await replaced.json()) as { bid: Bid & { id: string } }).bid;
 
     // 10. Accept a bid: accepted, others withdrawn, product reserved.
-    const acceptRes = await app.request(`/bids/${replacedBid.id}/accept`, authedPost(sellerToken), env);
+    const acceptRes = await app.request(`/bids/${replacedBid.id}/accept`, authedPost(artisanToken), env);
     assert(acceptRes.status === 200, `expected 200 on accept, got ${acceptRes.status}`);
     const accepted = (await acceptRes.json()) as {
       bid: Bid & { id: string };
@@ -510,21 +517,21 @@ async function main(): Promise<void> {
     assert(accepted.checkout.amount === 46000, "checkout amount should be the accepted bid");
     assert(accepted.checkout.productId === biddingProductId, "checkout product mismatch");
 
-    const afterAcceptAll = await app.request(`/products/${biddingProductId}/bids/all`, bearer(sellerToken), env);
+    const afterAcceptAll = await app.request(`/products/${biddingProductId}/bids/all`, bearer(artisanToken), env);
     const afterAcceptBody = (await afterAcceptAll.json()) as { bids: unknown[] };
     assert(afterAcceptBody.bids.length === 0, "no active bids should remain after accept");
 
-    const acceptNonSeller = await app.request(`/bids/${buyerBidId}/accept`, authedPost(buyerToken), env);
-    assert(acceptNonSeller.status === 403, `expected 403 for non-seller accept, got ${acceptNonSeller.status}`);
+    const acceptNonArtisan = await app.request(`/bids/${buyerBidId}/accept`, authedPost(buyerToken), env);
+    assert(acceptNonArtisan.status === 403, `expected 403 for non-artisan accept, got ${acceptNonArtisan.status}`);
 
-    const acceptNotActive = await app.request(`/bids/${buyerBidId}/accept`, authedPost(sellerToken), env);
+    const acceptNotActive = await app.request(`/bids/${buyerBidId}/accept`, authedPost(artisanToken), env);
     assert(acceptNotActive.status === 409, `expected 409 for re-accepting non-active bid, got ${acceptNotActive.status}`);
 
     // 11. Direct buy: reserve on a non-bidding product.
     const reserveOnBidding = await app.request(`/products/${biddingProductId}/reserve`, authedPost(buyerToken), env);
     assert(reserveOnBidding.status === 400, `expected 400 for reserve on bidding product, got ${reserveOnBidding.status}`);
 
-    const reserveSelf = await app.request(`/products/${nonBiddingProductId}/reserve`, authedPost(sellerToken), env);
+    const reserveSelf = await app.request(`/products/${nonBiddingProductId}/reserve`, authedPost(artisanToken), env);
     assert(reserveSelf.status === 400, `expected 400 for reserving own product, got ${reserveSelf.status}`);
 
     const reserveRes = await app.request(`/products/${nonBiddingProductId}/reserve`, authedPost(buyerToken), env);
@@ -555,13 +562,13 @@ async function main(): Promise<void> {
     assert(expiryBody.product.reservedBy === null, "reservedBy should clear on expiry");
     assert(expiryBody.product.reservedAmount === null, "reservedAmount should clear on expiry");
 
-    // 13. GET /products/mine — seller sees all statuses.
-    const mineListings = await app.request("/products/mine", bearer(sellerToken), env);
+    // 13. GET /products/mine — artisan sees all statuses.
+    const mineListings = await app.request("/products/mine", bearer(artisanToken), env);
     assert(mineListings.status === 200, `expected 200 for products/mine, got ${mineListings.status}`);
     const listings = (await mineListings.json()) as { products: Array<Product & { id: string }> };
-    assert(listings.products.length === 2, `expected 2 seller listings, got ${listings.products.length}`);
+    assert(listings.products.length === 2, `expected 2 artisan listings, got ${listings.products.length}`);
     const statuses = new Set(listings.products.map((p) => p.status));
-    assert(statuses.has("active") && statuses.has("reserved"), "seller listings should include active + reserved");
+    assert(statuses.has("active") && statuses.has("reserved"), "artisan listings should include active + reserved");
 
     // 14. GET /bids/mine — buyer's bids across products with product info.
     const myBids = await app.request("/bids/mine", bearer(buyerToken), env);
@@ -578,7 +585,7 @@ async function main(): Promise<void> {
     assert(mineById.size === 1, "exactly one bid row per product+buyer");
 
     // 15. Concurrent first-bids collapse to one row (deterministic id).
-    const raceProduct = await createProduct(env, sellerToken, { title: "Bid race item", priceAmount: 10000 });
+    const raceProduct = await createProduct(env, artisanToken, { title: "Bid race item", priceAmount: 10000 });
     const [raceA, raceB] = await Promise.all([
       app.request(`/products/${raceProduct}/bids`, json(buyer2Token, { amount: 1000, currency: "RWF" }), env),
       app.request(`/products/${raceProduct}/bids`, json(buyer2Token, { amount: 1200, currency: "RWF" }), env),
@@ -596,13 +603,13 @@ async function main(): Promise<void> {
     assert(raceSummary.bidCount === 1, `only one active bid survives the race, got ${raceSummary.bidCount}`);
 
     // 16. Concurrent accepts: exactly one winner reserves the product.
-    const accProduct = await createProduct(env, sellerToken, { title: "Accept race item", priceAmount: 20000 });
+    const accProduct = await createProduct(env, artisanToken, { title: "Accept race item", priceAmount: 20000 });
     const b1 = (await app.request(`/products/${accProduct}/bids`, json(buyerToken, { amount: 8000, currency: "RWF" }), env)).json();
     const b2 = (await app.request(`/products/${accProduct}/bids`, json(buyer2Token, { amount: 9000, currency: "RWF" }), env)).json();
     const [accBid1, accBid2] = [await b1, await b2] as [{ bid: Bid & { id: string } }, { bid: Bid & { id: string } }];
     const [accA, accB] = await Promise.all([
-      app.request(`/bids/${accBid1.bid.id}/accept`, authedPost(sellerToken), env),
-      app.request(`/bids/${accBid2.bid.id}/accept`, authedPost(sellerToken), env),
+      app.request(`/bids/${accBid1.bid.id}/accept`, authedPost(artisanToken), env),
+      app.request(`/bids/${accBid2.bid.id}/accept`, authedPost(artisanToken), env),
     ]);
     const accStatuses = [accA.status, accB.status].sort();
     assert(accStatuses.join(",") === "200,409", `exactly one accept wins, got ${accStatuses.join(",")}`);
@@ -620,7 +627,7 @@ async function main(): Promise<void> {
     assert(accSummary.bidCount === 0, "losing bids withdrawn, no active bids remain");
 
     console.log(
-      "BID TESTS PASSED (place/update/withdraw, public summary anonymity, seller view + accept -> reserve, direct buy reserve, expiry reversion, my-listings, my-bids)",
+      "BID TESTS PASSED (place/update/withdraw, public summary anonymity, artisan view + accept -> reserve, direct buy reserve, expiry reversion, my-listings, my-bids)",
     );
   } finally {
     jwksServer.close();

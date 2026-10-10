@@ -8,7 +8,7 @@ import { observeAuthState, signInWithGoogle } from "@/lib/firebase";
 import { createProduct } from "@/lib/products";
 import { sanitizeDescription, stripHtml } from "@/lib/html";
 import { contentTypeForFile, prepareImageFile, presignUploads, uploadToPresignedUrl } from "@/lib/upload";
-import { CATEGORIES, type Currency, type DeliveryFeePayer, type Product } from "@/types";
+import { CATEGORIES, type Currency, type DeliveryFeePayer, type Product, type ProductType } from "@/types";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/Toast";
 import { ListRowSkeleton } from "@/components/ui/Skeleton";
@@ -23,6 +23,32 @@ interface SelectedImage {
   id: string;
   file: File;
   previewUrl: string;
+}
+
+const OPTION_TYPES: Array<{ value: "text" | "choice" | "image_upload"; label: string }> = [
+  { value: "text", label: "Short text" },
+  { value: "choice", label: "Choice" },
+  { value: "image_upload", label: "Image upload" },
+];
+
+interface OptionDraft {
+  id: string;
+  type: "text" | "choice" | "image_upload";
+  label: string;
+  required: boolean;
+  priceAdjustment: string;
+  choices: string;
+}
+
+function emptyOption(): OptionDraft {
+  return {
+    id: crypto.randomUUID(),
+    type: "text",
+    label: "",
+    required: false,
+    priceAdjustment: "",
+    choices: "",
+  };
 }
 
 function SectionCard({
@@ -66,7 +92,16 @@ export function SellForm() {
   const [isNegotiable, setIsNegotiable] = useState(false);
   const [isBiddingEnabled, setIsBiddingEnabled] = useState(false);
   const [deliveryFee, setDeliveryFee] = useState("");
-  const [deliveryFeePayer, setDeliveryFeePayer] = useState<DeliveryFeePayer>("seller");
+  const [deliveryFeePayer, setDeliveryFeePayer] = useState<DeliveryFeePayer>("artisan");
+  const [listingType, setListingType] = useState<ProductType>("made_to_order");
+  const [productionTimeDays, setProductionTimeDays] = useState("");
+  const [isCustomizable, setIsCustomizable] = useState(false);
+  const [allowsReferenceUpload, setAllowsReferenceUpload] = useState(true);
+  const [customizationOptions, setCustomizationOptions] = useState<OptionDraft[]>([]);
+  const [tags, setTags] = useState("");
+  const [materials, setMaterials] = useState("");
+  const [region, setRegion] = useState("");
+  const [quantityAvailable, setQuantityAvailable] = useState("");
 
   const [images, setImages] = useState<SelectedImage[]>([]);
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -160,11 +195,47 @@ export function SellForm() {
     setError(null);
 
     const price = Number(priceAmount);
+    const productionDays = Number(productionTimeDays);
     if (!title.trim()) return setError("Title is required.");
     if (!stripHtml(description)) return setError("Description is required.");
     if (!category) return setError("Please choose a category.");
     if (!images.length) return setError("Add at least one image.");
     if (!Number.isFinite(price) || price <= 0) return setError("Enter a price greater than 0.");
+    if (!Number.isInteger(productionDays) || productionDays < 1 || productionDays > 365) {
+      return setError("Enter the production time in days (1-365).");
+    }
+    if (isCustomizable && customizationOptions.length === 0) {
+      return setError("Add at least one customization question, or turn customization off.");
+    }
+
+    const options = isCustomizable
+      ? customizationOptions.map((opt) => {
+          const priceAdjustment = Number(opt.priceAdjustment) || 0;
+          const choices =
+            opt.type === "choice"
+              ? opt.choices.split(/[\n,]+/).map((c) => c.trim()).filter(Boolean)
+              : undefined;
+          if (!opt.label.trim()) throw new Error("Every customization question needs a label.");
+          if (opt.type === "choice" && (!choices || choices.length === 0)) {
+            throw new Error("Choice questions need at least one choice.");
+          }
+          if (choices && new Set(choices).size !== choices.length) {
+            throw new Error(`Choices for "${opt.label.trim()}" must be unique.`);
+          }
+          return {
+            id: opt.id,
+            type: opt.type,
+            label: opt.label.trim(),
+            required: opt.required,
+            priceAdjustment,
+            ...(choices ? { choices } : {}),
+          };
+        })
+      : [];
+
+    const tagList = tags.split(/[\n,]+/).map((t) => t.trim()).filter(Boolean).slice(0, 20);
+    const materialList = materials.split(/[\n,]+/).map((t) => t.trim()).filter(Boolean).slice(0, 15);
+    const regionValue = region.trim() || null;
 
     setSubmitting(true);
     try {
@@ -192,6 +263,25 @@ export function SellForm() {
         videoUrl: videoUpload?.key ?? null,
         deliveryFee: Number(deliveryFee) || 0,
         deliveryFeePayer,
+        productType: listingType,
+        tags: tagList,
+        materials: materialList,
+        region: regionValue,
+        ...(listingType === "made_to_order"
+          ? {
+              productionTimeDays: productionDays,
+              isCustomizable,
+              customizationOptions: options,
+              allowsReferenceUpload,
+              quantityAvailable: 0,
+            }
+          : {
+              productionTimeDays: 0,
+              isCustomizable: false,
+              customizationOptions: [],
+              allowsReferenceUpload: false,
+              quantityAvailable: Math.max(1, Number(quantityAvailable)),
+            }),
       })) as Product & { id: string };
 
       setCreated(product);
@@ -211,8 +301,8 @@ export function SellForm() {
       <div className="container-page flex justify-center py-16">
         <div className="card w-full max-w-xl p-8 text-center">
           <span className="badge badge-success">Listed</span>
-          <h2 className="mt-4 text-2xl font-semibold tracking-tight text-foreground">
-            Your item is live
+          <h2 className="heading mt-4 text-2xl text-foreground">
+            Your craft is live
           </h2>
           <p className="mt-3 text-lg text-secondary">
             {created.title} — {formatPrice(created.priceAmount, created.priceCurrency)}
@@ -241,7 +331,7 @@ export function SellForm() {
           </div>
           <div className="mt-8">
             <Link href="/sell/new" className="text-sm font-medium text-accent-strong hover:underline">
-              List another item
+              Share another piece
             </Link>
           </div>
         </div>
@@ -253,8 +343,8 @@ export function SellForm() {
     return (
       <div className="container-page flex justify-center py-16">
         <div className="card w-full max-w-xl p-8 text-center">
-          <h2 className="text-2xl font-semibold tracking-tight text-foreground">Sign in to sell</h2>
-          <p className="mt-3 text-secondary">You need to sign in with Google before listing an item.</p>
+          <h2 className="heading text-2xl text-foreground">Sign in to sell your craft</h2>
+          <p className="mt-3 text-secondary">Share your handiwork with Rwanda and beyond — sign in with Google to get started.</p>
           <button
             type="button"
             onClick={handleSignIn}
@@ -282,10 +372,44 @@ export function SellForm() {
 
   return (
     <div className="container-page max-w-2xl py-8 sm:py-12">
-      <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-        List an item
+      <h1 className="heading text-2xl text-foreground sm:text-3xl">
+        Sell your craft
       </h1>
-      <p className="mt-1 text-sm text-muted">Photos, a clear title, and a fair price get the best results.</p>
+      <p className="mt-1 text-sm text-muted">Share your craft with Rwanda and beyond. Great photos, a clear title, and a fair price get the best results.</p>
+
+      {/* Listing type selector */}
+      <SectionCard step="First" title="What are you sharing?" description="Choose how this piece comes to its new home.">
+        <div className="flex gap-4">
+          <label className="flex flex-col items-start rounded-xl border border-border bg-background p-4 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="listingType"
+              value="made_to_order"
+              checked={listingType === "made_to_order"}
+              onChange={() => setListingType("made_to_order")}
+              className="size-4 rounded border-border accent-accent"
+            />
+            <div>
+              <p className="font-medium">Made to order</p>
+              <p className="text-xs text-muted">I craft this piece after the order lands.</p>
+            </div>
+          </label>
+          <label className="flex flex-col items-start rounded-xl border border-border bg-background p-4 cursor-pointer select-none">
+            <input
+              type="radio"
+              name="listingType"
+              value="ready_to_ship"
+              checked={listingType === "ready_to_ship"}
+              onChange={() => setListingType("ready_to_ship")}
+              className="size-4 rounded border-border accent-accent"
+            />
+            <div>
+              <p className="font-medium">Ready to ship</p>
+              <p className="text-xs text-muted">Already finished; paid in full up front; stock is tracked.</p>
+            </div>
+          </label>
+        </div>
+      </SectionCard>
 
       <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-6">
         <SectionCard
@@ -383,7 +507,7 @@ export function SellForm() {
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 maxLength={100}
-                placeholder="e.g. iPhone 12 — gently used"
+                placeholder="e.g. Hand-woven Agaseke peace basket"
                 className="field w-full"
               />
             </div>
@@ -424,15 +548,264 @@ export function SellForm() {
                   value={conditionNote}
                   onChange={(e) => setConditionNote(e.target.value)}
                   maxLength={100}
-                  placeholder="e.g. used 6 months, minor scratches"
+                  placeholder="e.g. made from sisal, hand-dyed with natural pigments"
                   className="field w-full"
                 />
               </div>
             </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="field-label" htmlFor="tags">
+                  Tags
+                </label>
+                <input
+                  id="tags"
+                  value={tags}
+                  onChange={(e) => setTags(e.target.value)}
+                  placeholder="e.g. traditional, gift, woven"
+                  className="field w-full"
+                />
+                <p className="mt-1.5 text-xs text-muted">
+                  Comma-separated discovery labels (up to 20).
+                </p>
+              </div>
+              <div>
+                <label className="field-label" htmlFor="materials">
+                  Materials
+                </label>
+                <input
+                  id="materials"
+                  value={materials}
+                  onChange={(e) => setMaterials(e.target.value)}
+                  placeholder="e.g. sisal, sweet grass"
+                  className="field w-full"
+                />
+                <p className="mt-1.5 text-xs text-muted">
+                  Comma-separated materials (up to 15).
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="field-label" htmlFor="region">
+                Region
+              </label>
+              <input
+                id="region"
+                value={region}
+                onChange={(e) => setRegion(e.target.value)}
+                maxLength={60}
+                placeholder="e.g. Kigali, Huye, Nyarubuye"
+                className="field w-full"
+              />
+              <p className="mt-1.5 text-xs text-muted">
+                Where the piece is made — shown on the listing and used in filters.
+              </p>
+            </div>
           </div>
         </SectionCard>
 
-        <SectionCard step="Step 3" title="Price & delivery">
+        <SectionCard
+          step="Step 3"
+          title="Production & customization"
+          description="How long this piece takes to make, and anything customers should answer at checkout."
+        >
+          <div className="flex flex-col gap-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="field-label" htmlFor="production-time">
+                  Production time <span className="text-danger">*</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="production-time"
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    max="365"
+                    value={productionTimeDays}
+                    onChange={(e) => setProductionTimeDays(e.target.value)}
+                    placeholder="e.g. 7"
+                    className="field w-full"
+                  />
+                  <span className="flex shrink-0 items-center rounded-xl border border-border bg-surface px-3 text-sm text-secondary">
+                    days
+                  </span>
+                </div>
+                <p className="mt-1.5 text-xs text-muted">
+                  Shown at checkout so customers know when to expect their piece.
+                </p>
+              </div>
+              <div>
+                <span className="field-label">Customization</span>
+                <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-background p-4">
+                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-foreground">
+                    <input
+                      type="checkbox"
+                      checked={isCustomizable}
+                      onChange={(e) => {
+                        setIsCustomizable(e.target.checked);
+                        if (customizationOptions.length === 0) {
+                          setCustomizationOptions([emptyOption()]);
+                        }
+                      }}
+                      className="size-4 rounded border-border accent-accent"
+                    />
+                    This piece can be customized
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-foreground">
+                    <input
+                      type="checkbox"
+                      checked={allowsReferenceUpload}
+                      onChange={(e) => setAllowsReferenceUpload(e.target.checked)}
+                      className="size-4 rounded border-border accent-accent"
+                    />
+                    Customers can attach a reference image / brief
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {isCustomizable && (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-foreground">Questions customers must answer</p>
+                  <button
+                    type="button"
+                    onClick={() => setCustomizationOptions((prev) => [...prev, emptyOption()])}
+                    className="btn btn-secondary h-8 px-3 text-sm"
+                  >
+                    + Add question
+                  </button>
+                </div>
+                {customizationOptions.map((opt, index) => (
+                  <div
+                    key={opt.id}
+                    className="rounded-xl border border-border bg-background p-4"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                        Question {index + 1}
+                      </p>
+                      <button
+                        type="button"
+                        aria-label="Remove question"
+                        onClick={() => setCustomizationOptions((prev) => prev.filter((o) => o.id !== opt.id))}
+                        className="text-xs font-medium text-danger hover:underline"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="field-label" htmlFor={`opt-label-${opt.id}`}>
+                          Question
+                        </label>
+                        <input
+                          id={`opt-label-${opt.id}`}
+                          value={opt.label}
+                          onChange={(e) =>
+                            setCustomizationOptions((prev) =>
+                              prev.map((o) => (o.id === opt.id ? { ...o, label: e.target.value } : o)),
+                            )
+                          }
+                          maxLength={80}
+                          placeholder="e.g. Pick a size"
+                          className="field w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="field-label" htmlFor={`opt-type-${opt.id}`}>
+                          Answer type
+                        </label>
+                        <select
+                          id={`opt-type-${opt.id}`}
+                          value={opt.type}
+                          onChange={(e) =>
+                            setCustomizationOptions((prev) =>
+                              prev.map((o) =>
+                                o.id === opt.id
+                                  ? { ...o, type: e.target.value as OptionDraft["type"] }
+                                  : o,
+                              ),
+                            )
+                          }
+                          className="field w-full"
+                        >
+                          {OPTION_TYPES.map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="field-label" htmlFor={`opt-price-${opt.id}`}>
+                          Price change ({priceCurrency})
+                        </label>
+                        <input
+                          id={`opt-price-${opt.id}`}
+                          type="number"
+                          inputMode="decimal"
+                          step="any"
+                          value={opt.priceAdjustment}
+                          onChange={(e) =>
+                            setCustomizationOptions((prev) =>
+                              prev.map((o) =>
+                                o.id === opt.id ? { ...o, priceAdjustment: e.target.value } : o,
+                              ),
+                            )
+                          }
+                          placeholder="0 = included, use + / - "
+                          className="field w-full"
+                        />
+                      </div>
+                      <div className="flex items-end pb-1">
+                        <label className="flex cursor-pointer items-center gap-2.5 text-sm text-foreground">
+                          <input
+                            type="checkbox"
+                            checked={opt.required}
+                            onChange={(e) =>
+                              setCustomizationOptions((prev) =>
+                                prev.map((o) =>
+                                  o.id === opt.id ? { ...o, required: e.target.checked } : o,
+                                ),
+                              )
+                            }
+                            className="size-4 rounded border-border accent-accent"
+                          />
+                          Required
+                        </label>
+                      </div>
+                      {opt.type === "choice" && (
+                        <div className="sm:col-span-2">
+                          <label className="field-label" htmlFor={`opt-choices-${opt.id}`}>
+                            Choices (one per line, or comma-separated)
+                          </label>
+                          <textarea
+                            id={`opt-choices-${opt.id}`}
+                            value={opt.choices}
+                            onChange={(e) =>
+                              setCustomizationOptions((prev) =>
+                                prev.map((o) => (o.id === opt.id ? { ...o, choices: e.target.value } : o)),
+                              )
+                            }
+                            rows={2}
+                            placeholder={"Small, Medium, Large"}
+                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted focus:border-accent"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard step="Step 4" title="Price & delivery">
           <div className="flex flex-col gap-4">
             <div>
               <label className="field-label" htmlFor="price">
@@ -470,6 +843,28 @@ export function SellForm() {
               </div>
             </div>
 
+            {listingType === "ready_to_ship" && (
+              <div>
+                <label className="field-label" htmlFor="quantity">
+                  Quantity in stock
+                </label>
+                <input
+                  id="quantity"
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  step="1"
+                  value={quantityAvailable}
+                  onChange={(e) => setQuantityAvailable(e.target.value)}
+                  placeholder="e.g. 5"
+                  className="field w-full sm:max-w-xs"
+                />
+                <p className="mt-1.5 text-xs text-muted">
+                  How many are ready to ship. The listing shows &ldquo;Sold out&rdquo; at zero.
+                </p>
+              </div>
+            )}
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label className="field-label" htmlFor="delivery-fee">
@@ -497,8 +892,8 @@ export function SellForm() {
                   onChange={(e) => setDeliveryFeePayer(e.target.value as DeliveryFeePayer)}
                   className="field w-full"
                 >
-                  <option value="seller">Seller pays delivery</option>
-                  <option value="buyer">Buyer pays delivery</option>
+                  <option value="artisan">Artisan pays delivery</option>
+                  <option value="buyer">Customer pays delivery</option>
                 </select>
               </div>
             </div>
@@ -526,7 +921,7 @@ export function SellForm() {
           </div>
         </SectionCard>
 
-        <SectionCard step="Step 4" title="Video" description="Optional — MP4 or MOV, max 50MB">
+        <SectionCard step="Step 5" title="Video" description="Optional — MP4 or MOV, max 50MB">
           {videoFile ? (
             <div className="flex items-center justify-between rounded-xl border border-border bg-background px-4 py-3">
               <span className="truncate text-sm text-foreground">{videoFile.name}</span>

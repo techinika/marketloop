@@ -1,5 +1,5 @@
-import { SellerBidsManager } from "@/components/SellerBidsManager";
+import { ArtisanBidsManager } from "@/components/ArtisanBidsManager";
 
-export default function SellerBidsPage() {
-  return <SellerBidsManager />;
+export default function ArtisanBidsPage() {
+  return <ArtisanBidsManager />;
 }

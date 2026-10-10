@@ -118,8 +118,8 @@ export default function AdminOrdersPage() {
               <tr>
                 <th className="px-4 py-3 font-medium">Created</th>
                 <th className="px-4 py-3 font-medium">Product</th>
-                <th className="px-4 py-3 font-medium">Buyer</th>
-                <th className="px-4 py-3 font-medium">Seller</th>
+                <th className="px-4 py-3 font-medium">Customer</th>
+                <th className="px-4 py-3 font-medium">Artisan</th>
                 <th className="px-4 py-3 font-medium">Amount</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Deadline</th>
@@ -146,8 +146,8 @@ export default function AdminOrdersPage() {
                     <p className="text-xs text-muted">{row.buyer.email}</p>
                   </td>
                   <td className="px-4 py-3">
-                    <p className="text-foreground">{row.seller.name}</p>
-                    <p className="text-xs text-muted">{row.seller.email}</p>
+                    <p className="text-foreground">{row.artisan.name}</p>
+                    <p className="text-xs text-muted">{row.artisan.email}</p>
                   </td>
                   <td className="px-4 py-3 font-medium text-foreground">
                     {formatPrice(row.totalPaid, row.currency)}

@@ -384,16 +384,23 @@ async function createProduct(
     json(token, {
       title: "Admin test item",
       description: "An item used to test the admin panel and notifications.",
-      category: "Electronics",
+      category: "Pottery",
       priceAmount: 50000,
       priceCurrency: "RWF",
       isNegotiable: false,
       isBiddingEnabled: false,
       conditionNote: "like new",
-      images: ["uploads/seller-1/img.jpg"],
+      images: ["uploads/artisan-1/img.jpg"],
       videoUrl: null,
       deliveryFee: 0,
-      deliveryFeePayer: "seller",
+      deliveryFeePayer: "artisan",
+      productType: "made_to_order",
+      tags: [],
+      materials: [],
+      region: null,
+      acceptingOrders: true,
+      maxConcurrentOrders: null,
+      productionTimeDays: 7,
       ...overrides,
     }),
     env,
@@ -424,7 +431,7 @@ async function getNotifications(token: string): Promise<Array<Notification & { i
 
 let env: Record<string, unknown>;
 let adminToken: string;
-let sellerToken: string;
+let artisanToken: string;
 let buyerToken: string;
 let buyer2Token: string;
 let db: FirestoreClient;
@@ -465,7 +472,7 @@ async function main(): Promise<void> {
       R2_ACCOUNT_ID: "test-account",
       R2_ACCESS_KEY_ID: "AKIDEXAMPLE",
       R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-      R2_BUCKET_NAME: "allsha-images",
+      R2_BUCKET_NAME: "handi-assets",
       FIREBASE_PROJECT_ID: PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: "test@example.com",
       FIREBASE_PRIVATE_KEY: "test-key",
@@ -492,7 +499,7 @@ async function main(): Promise<void> {
       exp: now + 3600,
     };
     adminToken = await mintToken({ ...claims, sub: "admin-1", name: "Admin", email: "admin@example.com" }, privateKey);
-    sellerToken = await mintToken({ ...claims, sub: "seller-1", name: "Seller", email: "seller@example.com" }, privateKey);
+    artisanToken = await mintToken({ ...claims, sub: "artisan-1", name: "Artisan", email: "artisan@example.com" }, privateKey);
     buyerToken = await mintToken({ ...claims, sub: "buyer-1", name: "Buyer One", email: "buyer1@example.com" }, privateKey);
     buyer2Token = await mintToken({ ...claims, sub: "buyer-2", name: "Buyer Two", email: "buyer2@example.com" }, privateKey);
 
@@ -505,7 +512,7 @@ async function main(): Promise<void> {
     });
     for (const u of [
       { uid: "admin-1", name: "Admin", email: "admin@example.com", photoUrl: null, isAdmin: true },
-      { uid: "seller-1", name: "Seller", email: "seller@example.com", photoUrl: null },
+      { uid: "artisan-1", name: "Artisan", email: "artisan@example.com", photoUrl: null },
       { uid: "buyer-1", name: "Buyer One", email: "buyer1@example.com", photoUrl: null },
       { uid: "buyer-2", name: "Buyer Two", email: "buyer2@example.com", photoUrl: null },
     ]) {
@@ -527,18 +534,18 @@ async function main(): Promise<void> {
     assert(meAdmin.status === 200, `GET /auth/me (admin) failed with ${meAdmin.status}`);
     assert(((await meAdmin.json()) as { user: { isAdmin: boolean } }).user.isAdmin === true, "admin sees isAdmin: true");
 
-    const meSeller = await app.request("/auth/me", bearer(sellerToken), env);
-    assert(((await meSeller.json()) as { user: { isAdmin: boolean } }).user.isAdmin === false, "seller sees isAdmin: false");
+    const meArtisan = await app.request("/auth/me", bearer(artisanToken), env);
+    assert(((await meArtisan.json()) as { user: { isAdmin: boolean } }).user.isAdmin === false, "artisan sees isAdmin: false");
 
     const noToken = await app.request("/admin/stats", {}, env);
     assert(noToken.status === 401, `admin without token should be 401, got ${noToken.status}`);
-    const nonAdmin = await app.request("/admin/stats", bearer(sellerToken), env);
+    const nonAdmin = await app.request("/admin/stats", bearer(artisanToken), env);
     assert(nonAdmin.status === 403, `non-admin should be 403, got ${nonAdmin.status}`);
     const okStats = await app.request("/admin/stats", bearer(adminToken), env);
     assert(okStats.status === 200, `admin stats should be 200, got ${okStats.status}`);
 
-    // ---- 2. Bid notifications: placed -> seller; accepted -> winner + others ---
-    const productA = await createProduct(sellerToken, {
+    // ---- 2. Bid notifications: placed -> artisan; accepted -> winner + others ---
+    const productA = await createProduct(artisanToken, {
       title: "Bid notification item",
       isBiddingEnabled: true,
       priceAmount: 50000,
@@ -550,14 +557,14 @@ async function main(): Promise<void> {
     const place2 = await app.request(`/products/${productA}/bids`, json(buyer2Token, { amount: 44000, currency: "RWF" }), env);
     assert(place2.status === 201, `buyer-2 bid failed with ${place2.status}`);
 
-    const sellerNotes = await getNotifications(sellerToken);
+    const artisanNotes = await getNotifications(artisanToken);
     assert(
-      sellerNotes.filter((n) => n.type === "bid_placed").length === 2,
-      `seller should have 2 bid_placed notifications, got ${sellerNotes.length}`,
+      artisanNotes.filter((n) => n.type === "bid_placed").length === 2,
+      `artisan should have 2 bid_placed notifications, got ${artisanNotes.length}`,
     );
 
     const bid1 = ((await place1.json()) as { bid: Bid & { id: string } }).bid;
-    const acceptRes = await app.request(`/bids/${bid1.id}/accept`, authedPost(sellerToken), env);
+    const acceptRes = await app.request(`/bids/${bid1.id}/accept`, authedPost(artisanToken), env);
     assert(acceptRes.status === 200, `accept bid failed with ${acceptRes.status}`);
 
     const winnerNotes = await getNotifications(buyerToken);
@@ -570,10 +577,13 @@ async function main(): Promise<void> {
     const heldAck = await paypackWebhook({ ref: orderA.paymentReference, status: "successful", kind: "CASHIN" });
     assert(heldAck.status === 200, `paypack webhook failed with ${heldAck.status}`);
 
-    const sellerHeld = await getNotifications(sellerToken);
+    const artisanHeld = await getNotifications(artisanToken);
     const buyerHeld = await getNotifications(buyerToken);
-    assert(sellerHeld.some((n) => n.type === "payment_held" && n.relatedOrderId === orderA.id), "seller notified payment held");
+    assert(artisanHeld.some((n) => n.type === "payment_held" && n.relatedOrderId === orderA.id), "artisan notified payment held");
     assert(buyerHeld.some((n) => n.type === "payment_held" && n.relatedOrderId === orderA.id), "buyer notified payment held");
+
+    const readyA = await app.request(`/orders/${orderA.id}/mark-ready`, authedPost(artisanToken), env);
+    assert(readyA.status === 200, `mark-ready failed with ${readyA.status}`);
 
     const confirmBuyer = await app.request(
       `/orders/${orderA.id}/confirm-delivery`,
@@ -581,29 +591,29 @@ async function main(): Promise<void> {
       env,
     );
     assert(confirmBuyer.status === 200, `buyer confirm failed with ${confirmBuyer.status}`);
-    const confirmSeller = await app.request(
+    const confirmArtisan = await app.request(
       `/orders/${orderA.id}/confirm-delivery`,
-      json(sellerToken, { received: true, rating: 4 }),
+      json(artisanToken, { received: true, rating: 4 }),
       env,
     );
-    assert(confirmSeller.status === 200, `seller confirm failed with ${confirmSeller.status}`);
-    const sellerReleased = await getNotifications(sellerToken);
+    assert(confirmArtisan.status === 200, `artisan confirm failed with ${confirmArtisan.status}`);
+    const artisanReleased = await getNotifications(artisanToken);
     assert(
-      sellerReleased.some((n) => n.type === "escrow_released" && n.relatedOrderId === orderA.id),
-      "seller notified funds released",
+      artisanReleased.some((n) => n.type === "escrow_released" && n.relatedOrderId === orderA.id),
+      "artisan notified funds released",
     );
 
     // ---- 4. Admin order list, detail, users, stats ---------------------------
     const adminOrders = await app.request("/admin/orders", bearer(adminToken), env);
     assert(adminOrders.status === 200, `GET /admin/orders failed with ${adminOrders.status}`);
     const adminOrdersBody = (await adminOrders.json()) as {
-      orders: Array<{ id: string; escrowStatus: string; buyer: { name: string; email: string }; seller: { name: string; email: string }; product: { title: string }; needsAttention: boolean; totalPaid: number }>;
+      orders: Array<{ id: string; escrowStatus: string; buyer: { name: string; email: string }; artisan: { name: string; email: string }; product: { title: string }; needsAttention: boolean; totalPaid: number }>;
     };
     assert(adminOrdersBody.orders.length === 1, "one order in admin list");
     const rowA = adminOrdersBody.orders[0]!;
     assert(rowA.escrowStatus === "released", "released order listed");
     assert(rowA.buyer.name === "Buyer One" && rowA.buyer.email === "buyer1@example.com", "buyer name+email included");
-    assert(rowA.seller.name === "Seller" && rowA.seller.email === "seller@example.com", "seller name+email included");
+    assert(rowA.artisan.name === "Artisan" && rowA.artisan.email === "artisan@example.com", "artisan name+email included");
     assert(rowA.product.title === "Bid notification item", "product title included");
     assert(rowA.totalPaid === 50000, "totalPaid included");
 
@@ -620,9 +630,9 @@ async function main(): Promise<void> {
       total: number;
     };
     assert(usersBody.total === 4, "all four users listed");
-    const sellerRow = usersBody.users.find((u) => u.uid === "seller-1")!;
-    assert(sellerRow.productCount === 1, "seller product count (productA at this point)");
-    assert(sellerRow.orderCount === 0, "seller order count (orders where buyerId = seller)");
+    const artisanRow = usersBody.users.find((u) => u.uid === "artisan-1")!;
+    assert(artisanRow.productCount === 1, "artisan product count (productA at this point)");
+    assert(artisanRow.orderCount === 0, "artisan order count (orders where buyerId = artisan)");
     const adminRow = usersBody.users.find((u) => u.uid === "admin-1")!;
     assert(adminRow.isAdmin === true, "admin flagged in user list");
 
@@ -655,7 +665,7 @@ async function main(): Promise<void> {
     assert(afterReadAll.every((n) => n.isRead), "read-all marks everything read");
 
     // ---- 6. Auto-refund -> buyer notified; admin mark-refunded ----------------
-    const productG = await createProduct(sellerToken, {
+    const productG = await createProduct(artisanToken, {
       title: "Auto refund USD",
       priceAmount: 300,
       priceCurrency: "USD",
@@ -679,7 +689,7 @@ async function main(): Promise<void> {
     );
 
     // ---- 7. Needs-attention ordering + status filter --------------------------
-    const productI = await createProduct(sellerToken, { title: "Approaching deadline", priceAmount: 10000 });
+    const productI = await createProduct(artisanToken, { title: "Approaching deadline", priceAmount: 10000 });
     await reserve(buyerToken, productI);
     const orderI = await createRwfOrder(buyerToken, productI);
     await paypackWebhook({ ref: orderI.paymentReference, status: "successful", kind: "CASHIN" });
@@ -723,7 +733,7 @@ async function main(): Promise<void> {
     // ---- 9. Force-release (admin-only, requires adminNote) --------------------
     const noNote = await app.request(`/admin/orders/${orderI.id}/force-release`, json(adminToken, {}), env);
     assert(noNote.status === 400, `force-release without adminNote should be 400, got ${noNote.status}`);
-    const nonAdminRelease = await app.request(`/admin/orders/${orderI.id}/force-release`, json(sellerToken, { adminNote: "I'm not admin" }), env);
+    const nonAdminRelease = await app.request(`/admin/orders/${orderI.id}/force-release`, json(artisanToken, { adminNote: "I'm not admin" }), env);
     assert(nonAdminRelease.status === 403, `non-admin force-release should be 403, got ${nonAdminRelease.status}`);
 
     const forceRes = await app.request(`/admin/orders/${orderI.id}/force-release`, json(adminToken, { adminNote: "Admin verified delivery by phone" }), env);
@@ -732,9 +742,9 @@ async function main(): Promise<void> {
     assert(forced.order.escrowStatus === "released", "force-release sets released");
     assert(forced.order.adminNote === "Admin verified delivery by phone", "adminNote stored");
 
-    const sellerWallet = await app.request("/wallet", bearer(sellerToken), env);
-    const walletBody = (await sellerWallet.json()) as { walletBalance: number; transactions: Array<{ orderId: string | null; amount: number; type: string }> };
-    assert(walletBody.walletBalance === 45000 + 10000, "seller credited for both releases (45000 agreed + 10000 force)");
+    const artisanWallet = await app.request("/wallet", bearer(artisanToken), env);
+    const walletBody = (await artisanWallet.json()) as { walletBalance: number; transactions: Array<{ orderId: string | null; amount: number; type: string }> };
+    assert(walletBody.walletBalance === 45000 + 10000, "artisan credited for both releases (45000 agreed + 10000 force)");
 
     const forceOnReleased = await app.request(`/admin/orders/${orderA.id}/force-release`, json(adminToken, { adminNote: "again" }), env);
     assert(forceOnReleased.status === 409, `force-release on released order should be 409, got ${forceOnReleased.status}`);
@@ -747,21 +757,21 @@ async function main(): Promise<void> {
     assert(mineBody.orders.some((o) => o.id === orderA.id), "mine includes released order");
     assert(mineBody.orders[0]!.product !== null, "mine includes product summary");
 
-    const salesRes = await app.request("/orders/sales", bearer(sellerToken), env);
+    const salesRes = await app.request("/orders/sales", bearer(artisanToken), env);
     assert(salesRes.status === 200, `GET /orders/sales failed with ${salesRes.status}`);
     const salesBody = (await salesRes.json()) as { orders: Array<{ id: string; buyer: { name: string; email: string } }> };
-    assert(salesBody.orders.length === 3, "seller sees all their sales");
+    assert(salesBody.orders.length === 3, "artisan sees all their sales");
     assert(salesBody.orders.some((o) => o.buyer.name === "Buyer One"), "sales include buyer info");
 
     // ---- 11. Dispute surfaces to admin (pinned first) + thread in detail -----
-    const productDisp = await createProduct(sellerToken, { title: "Disputed widget", priceAmount: 6000 });
+    const productDisp = await createProduct(artisanToken, { title: "Disputed widget", priceAmount: 6000 });
     await reserve(buyerToken, productDisp);
     const createDisp = await app.request("/orders", json(buyerToken, { productId: productDisp, phoneNumber: "0788123456" }), env);
     const orderDisp = ((await createDisp.json()) as { order: Order & { id: string } }).order;
     await paypackWebhook({ ref: orderDisp.paymentReference, status: "successful", kind: "CASHIN" });
 
     await app.request(`/orders/${orderDisp.id}/messages`, json(buyerToken, { text: "Item arrived damaged." }), env);
-    await app.request(`/orders/${orderDisp.id}/messages`, json(sellerToken, { text: "Happy to fix it." }), env);
+    await app.request(`/orders/${orderDisp.id}/messages`, json(artisanToken, { text: "Happy to fix it." }), env);
 
     const disputeRes = await app.request(
       `/orders/${orderDisp.id}/confirm-delivery`,
@@ -788,7 +798,7 @@ async function main(): Promise<void> {
     assert(dispDetailBody.order.hasDispute === true, "detail carries dispute flag");
     assert(dispDetailBody.messages.length === 2, "admin sees the full message thread");
     assert(dispDetailBody.messages[0]!.text === "Item arrived damaged.", "thread ordered oldest first");
-    assert(dispDetailBody.messages[1]!.text === "Happy to fix it.", "thread includes seller reply");
+    assert(dispDetailBody.messages[1]!.text === "Happy to fix it.", "thread includes artisan reply");
 
     const buyerAfterDispute = await getNotifications(buyerToken);
     assert(

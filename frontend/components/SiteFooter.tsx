@@ -4,26 +4,36 @@ const LINK_GROUPS: Array<{ title: string; links: Array<{ label: string; href: st
   {
     title: "Marketplace",
     links: [
-      { label: "Explore", href: "/explore" },
-      { label: "Sell an item", href: "/sell/new" },
-      { label: "My bids", href: "/my-bids" },
-      { label: "Wallet", href: "/wallet" },
+      { label: "Discover", href: "/explore" },
+      { label: "Browse by craft", href: "/#categories" },
+      { label: "All artisans", href: "/artisan" },
+      { label: "Featured artisans", href: "/#artisans" },
     ],
   },
   {
-    title: "Your account",
+    title: "Selling & account",
     links: [
-      { label: "Dashboard", href: "/dashboard" },
+      { label: "Sell your craft", href: "/sell/new" },
       { label: "My listings", href: "/sell/my-listings" },
+      { label: "Dashboard", href: "/dashboard" },
       { label: "Verification", href: "/account/verification" },
     ],
   },
   {
     title: "Company",
     links: [
+      { label: "About", href: "/about" },
       { label: "How it works", href: "/#how-it-works" },
-      { label: "Features", href: "/#features" },
-      { label: "Support", href: "mailto:support@allsha.rw" },
+      { label: "FAQ", href: "/faq" },
+      { label: "Contact", href: "/contact" },
+    ],
+  },
+  {
+    title: "Legal",
+    links: [
+      { label: "Shipping & returns", href: "/shipping" },
+      { label: "Terms of use", href: "/terms" },
+      { label: "Privacy policy", href: "/privacy" },
     ],
   },
 ];
@@ -31,12 +41,13 @@ const LINK_GROUPS: Array<{ title: string; links: Array<{ label: string; href: st
 export function SiteFooter() {
   return (
     <footer className="mt-auto border-t border-border bg-surface">
-      <div className="container-page grid gap-10 py-12 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr]">
+      <div className="container-page grid gap-10 py-12 sm:grid-cols-2 lg:grid-cols-[1.5fr_repeat(4,1fr)]">
         <div>
-          <span className="text-lg font-semibold tracking-tight text-foreground">ALLSHA</span>
+          <span className="heading text-lg text-foreground">Handi</span>
           <p className="mt-3 max-w-xs text-sm leading-6 text-secondary">
-            A peer-to-peer marketplace where every payment is held in escrow until delivery is
-            confirmed — so buying and selling used goods is safe for both sides.
+            Handi is where Rwandan handiwork finds its people — commissioned
+            straight from the artisan, with every payment held safely in escrow
+            until the piece reaches you.
           </p>
         </div>
 
@@ -61,9 +72,9 @@ export function SiteFooter() {
 
       <div className="border-t border-border">
         <div className="container-page flex flex-col gap-2 py-6 text-xs text-muted sm:flex-row sm:items-center sm:justify-between">
-          <p>&copy; {new Date().getFullYear()} ALLSHA. All rights reserved.</p>
+          <p>&copy; {new Date().getFullYear()} Handi. All rights reserved.</p>
           <p>
-            Payments secured by escrow · MTN MoMo, Airtel Money &amp; cards supported
+            Made by hand, paid in escrow · MTN MoMo, Airtel Money &amp; cards supported
           </p>
         </div>
       </div>

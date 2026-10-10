@@ -1,4 +1,4 @@
-// Per-order messaging between buyer and seller, plus the running-average
+// Per-order messaging between buyer and artisan, plus the running-average
 // rating recompute shared by the delivery-confirmation flow.
 
 import { firestoreFromEnv } from "./firestore";

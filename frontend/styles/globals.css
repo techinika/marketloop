@@ -1,44 +1,52 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
- * ALLSHA design tokens — single source of truth.
- * Backgrounds stay light/off-white; the emerald accent is used sparingly for
- * primary actions, active states and links only. Three text tiers:
- *   foreground (#18181B) = headings / primary
- *   secondary (#52525B) = body / supporting copy
- *   muted (#A1A1AA)      = meta / tertiary
+ * Handi design tokens — single source of truth.
+ * Warm craft palette: cream paper background, terracotta primary accent, and a
+ * secondary forest-green/ochre pairing so status badges stay legible without
+ * competing with action buttons. Three text tiers:
+ *   foreground (#2B2320) = headings / primary (warm near-black)
+ *   secondary  (#6B5F57) = body / supporting copy (warm gray)
+ *   muted      (#A99C8F) = meta / tertiary (lighter warm gray)
  * ------------------------------------------------------------------------- */
 @theme {
   /* Surfaces */
-  --color-background: #fafafa;
-  --color-surface: #ffffff;
-  --color-surface-muted: #f4f4f5;
+  --color-background: #fbf8f3;
+  --color-surface: #fffdfa;
+  --color-surface-muted: #f3ede4;
 
   /* Text tiers */
-  --color-foreground: #18181b;
-  --color-secondary: #52525b;
-  --color-muted: #a1a1aa;
+  --color-foreground: #2b2320;
+  --color-secondary: #6b5f57;
+  --color-muted: #a99c8f;
 
-  /* Borders */
-  --color-border: #e4e4e7;
+  /* Borders (soft warm beige) */
+  --color-border: #e8dfd3;
 
-  /* Primary accent (emerald) — used sparingly */
-  --color-accent: #10b981;
-  --color-accent-strong: #059669;
-  --color-accent-soft: #ecfdf5;
+  /* Primary accent (terracotta) — action buttons, active states, links */
+  --color-accent: #c1622d;
+  --color-accent-strong: #a5511f;
+  --color-accent-soft: #fae9dc;
+
+  /* Secondary accent (forest green + ochre) — sparing badges/highlights */
+  --color-accent-secondary: #6b7f4f;
+  --color-accent-secondary-soft: #eef1e4;
+  --color-ochre: #b8862b;
+  --color-ochre-soft: #f8f0dc;
 
   /* Semantic status tones (soft backgrounds, never saturated) */
-  --color-success: #16a34a;
-  --color-success-soft: #dcfce7;
-  --color-warning: #b45309;
-  --color-warning-soft: #fef3c7;
-  --color-danger: #dc2626;
-  --color-danger-soft: #fee2e2;
-  --color-info: #2563eb;
-  --color-info-soft: #dbeafe;
+  --color-success: #5c6b38;
+  --color-success-soft: #eef0e4;
+  --color-warning: #b8862b;
+  --color-warning-soft: #f7efdd;
+  --color-danger: #c2410c;
+  --color-danger-soft: #fae8dd;
+  --color-info: #5f7a87;
+  --color-info-soft: #e9f0f2;
 
   /* Type */
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-work-sans);
+  --font-serif: var(--font-fraunces);
   --font-mono: var(--font-geist-mono);
 
   /* Radius */
@@ -46,8 +54,8 @@
   --radius-input: 0.75rem; /* rounded-xl */
 
   /* Shadows: soft by default, lifted only on hover */
-  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 12px rgb(0 0 0 / 0.05);
-  --shadow-lifted: 0 2px 4px rgb(0 0 0 / 0.05), 0 12px 24px rgb(0 0 0 / 0.08);
+  --shadow-soft: 0 1px 2px rgb(60 45 32 / 0.05), 0 4px 12px rgb(60 45 32 / 0.06);
+  --shadow-lifted: 0 2px 4px rgb(60 45 32 / 0.06), 0 12px 24px rgb(60 45 32 / 0.1);
 }
 
 /* ---------------------------------------------------------------------------
@@ -113,6 +121,19 @@
 /* ---------------------------------------------------------------------------
  * Cards
  * ------------------------------------------------------------------------- */
+
+/* Serif display heading — Fraunces for craft/heritage warmth. */
+@utility heading {
+  font-family: var(--font-serif);
+  font-weight: 550;
+  letter-spacing: -0.015em;
+}
+
+/* Photographic image treatment: match card radius, 1px warm border, no shadow. */
+@utility img-warm {
+  border-radius: var(--radius-card);
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, var(--color-accent) 20%);
+}
 
 /* Static content card — 1px border, soft shadow, generous padding handled by caller. */
 @utility card {
@@ -257,6 +278,9 @@
 
 /* ---------------------------------------------------------------------------
  * Badges — small pills with soft semantic tints (never harsh/saturated).
+ * Handi status language: positive availability uses the forest secondary tone,
+ * muted states ("Fully booked", "Sold out") use warm gray so the terracotta
+ * action buttons stay visually dominant.
  * ------------------------------------------------------------------------- */
 @utility badge {
   display: inline-flex;
@@ -278,6 +302,16 @@
 @utility badge-accent {
   background: var(--color-accent-soft);
   color: var(--color-accent-strong);
+}
+
+@utility badge-secondary {
+  background: var(--color-accent-secondary-soft);
+  color: var(--color-accent-secondary);
+}
+
+@utility badge-ochre {
+  background: var(--color-ochre-soft);
+  color: var(--color-ochre);
 }
 
 @utility badge-success {
@@ -302,11 +336,12 @@
 
 /* ---------------------------------------------------------------------------
  * Loading skeletons — shimmer blocks that mirror the content they replace.
+ * Warm beige shimmer instead of the old cold gray.
  * ------------------------------------------------------------------------- */
 @utility skeleton {
   border-radius: 0.5rem;
   background:
-    linear-gradient(90deg, #f4f4f5 25%, #e9e9eb 37%, #f4f4f5 63%);
+    linear-gradient(90deg, #f3ede4 25%, #e9e0d3 37%, #f3ede4 63%);
   background-size: 400% 100%;
   animation: skeleton-shimmer 1.4s ease infinite;
 }
@@ -336,8 +371,18 @@ body {
   font-weight: 400;
 }
 
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-serif);
+  letter-spacing: -0.015em;
+}
+
 ::selection {
-  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 /* ---------------------------------------------------------------------------

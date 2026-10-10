@@ -11,11 +11,13 @@ import type { Product } from "@/types";
 import { cn } from "@/lib/cn";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ListRowSkeleton } from "@/components/ui/Skeleton";
+import { availabilityMeta } from "@/components/ExploreFeed";
 
 const STATUS_BADGE: Record<Product["status"], { label: string; cls: string }> = {
   active: { label: "Active", cls: "badge-success" },
   reserved: { label: "Reserved", cls: "badge-warning" },
   sold: { label: "Sold", cls: "badge-neutral" },
+  sold_out: { label: "Sold out", cls: "badge-neutral" },
   removed: { label: "Removed", cls: "badge-neutral" },
 };
 
@@ -57,10 +59,10 @@ export function MyListings() {
     <div className="container-page max-w-3xl py-8 sm:py-12">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-            My Listings
+          <h1 className="heading text-2xl text-foreground sm:text-3xl">
+            My listings
           </h1>
-          <p className="mt-1 text-sm text-muted">Everything you&apos;ve listed on ALLSHA.</p>
+          <p className="mt-1 text-sm text-muted">Everything you&apos;ve shared on Handi.</p>
         </div>
         <Link href="/sell/new" className="btn btn-primary">
           New listing
@@ -72,7 +74,7 @@ export function MyListings() {
           <EmptyState
             icon="inbox"
             title="Sign in to see your listings"
-            description="Your products and their statuses will show up here."
+            description="Your pieces and their statuses will show up here."
           >
             <Link href="/" className="btn btn-primary">
               Sign in
@@ -89,46 +91,52 @@ export function MyListings() {
         <div className="mt-8">
           <EmptyState
             icon="package"
-            title="Nothing listed yet"
-            description="List your first item — it only takes a minute and is free."
+            title="Nothing shared yet"
+            description="Share your first piece — it takes a few minutes and is free."
           >
             <Link href="/sell/new" className="btn btn-primary">
-              List an item
+              Sell your craft
             </Link>
           </EmptyState>
         </div>
       ) : (
         <ul className="mt-6 flex flex-col gap-3">
-          {products.map((product) => {
-            const meta = STATUS_BADGE[product.status];
-            return (
-              <li key={product.id} className="card flex items-center gap-4 p-4 transition-shadow hover:shadow-lifted">
-                <Link href={`/product/${product.id}`} className="shrink-0">
-                  {product.images[0] ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={mediaUrl(product.images[0])}
-                      alt=""
-                      className="size-16 rounded-xl object-cover"
-                    />
-                  ) : (
-                    <div className="flex size-16 items-center justify-center rounded-xl bg-surface-muted text-xs text-muted">
-                      No image
-                    </div>
-                  )}
-                </Link>
-                <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/product/${product.id}`}
-                    className="block truncate text-sm font-medium text-foreground hover:underline"
-                  >
-                    {product.title}
-                  </Link>
-                  <p className="mt-1 text-base font-semibold text-foreground">
-                    {formatPrice(product.priceAmount, product.priceCurrency)}
-                  </p>
-                  <span className={cn("badge mt-1", meta.cls)}>{meta.label}</span>
-                </div>
+{products.map((product) => {
+    const statusMeta = STATUS_BADGE[product.status];
+    const isSoldOut = product.productType === "ready_to_ship" && product.quantityAvailable === 0;
+    const avail = product.status === "active" ? availabilityMeta(product) : null;
+    const badgeCls = avail ? avail.cls : isSoldOut ? "badge-neutral" : statusMeta?.cls;
+    const badgeText = avail ? avail.label : isSoldOut ? "Sold out" : statusMeta?.label;
+    return (
+      <li key={product.id} className="card flex items-center gap-4 p-4 transition-shadow hover:shadow-lifted">
+        <Link href={`/product/${product.id}`} className="shrink-0">
+          {product.images[0] ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={mediaUrl(product.images[0])}
+              alt=""
+              className="size-16 rounded-xl object-cover"
+            />
+          ) : (
+            <div className="flex size-16 items-center justify-center rounded-xl bg-surface-muted text-xs text-muted">
+              No image
+            </div>
+          )}
+        </Link>
+        <div className="min-w-0 flex-1">
+          <Link
+            href={`/product/${product.id}`}
+            className="block truncate text-sm font-medium text-foreground hover:underline"
+          >
+            {product.title}
+          </Link>
+          <p className="mt-1 text-base font-semibold text-foreground">
+            {formatPrice(product.priceAmount, product.priceCurrency)}
+          </p>
+          <span className={cn("badge mt-1", badgeCls)}>
+            {badgeText}
+          </span>
+        </div>
                 {product.isBiddingEnabled && product.status === "active" && (
                   <Link
                     href={`/sell/my-listings/${product.id}/bids`}

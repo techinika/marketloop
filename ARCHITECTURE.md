@@ -1,8 +1,7 @@
-# ALLSHA — Architecture
+# Handi — Architecture
 
 Companion to `README.md` (which is the operational/getting-started guide). This
-file documents how the system is put together and the engineering decisions that
-keep it running. Read this before touching cross-cutting concerns.
+file documents how the system is put together and the engineering decisions that keep it running. Read this before touching cross-cutting concerns.
 
 ## System overview
 
@@ -34,8 +33,9 @@ Two deployables in one monorepo:
   never pull the Firebase client into their bundle. Authenticated calls go
   through `lib/api.ts`, which attaches the Firebase ID token.
 - **Workers** (`workers/`): a single Hono app. No persistent runtime state —
-  everything lives in Firestore. Media in R2, OTP codes in KV, payments via
-  Paypack/Pesapal HTTP APIs.
+  everything lives in Firestore. Media in R2 (`IMAGES` binding → bucket
+  `handi-assets`; presign uses `R2_BUCKET_NAME`, so the two must match), OTP
+  codes in KV (`OTP_KV`), payments via Paypack/Pesapal HTTP APIs.
 
 ## Authentication
 
@@ -72,7 +72,7 @@ speaks to the Firestore REST API. Typed helpers:
   so balance changes are applied atomically by Firestore, never read-modify-write.
 - `commitWithCreate` — one `:commit` containing a CAS update + optional
   `increment` transforms + a document create. Used for the escrow release
-  (order held→released + seller `walletBalance` increment + wallet-transaction
+  (order held→released + artisan `walletBalance` increment + wallet-transaction
   create applied in one request) and for `acceptBidAndReserve`.
 - `commitWrites` — raw `:commit` writer; returns `false` when a CAS precondition
   fails (409), `true` on success. Exposes the full `.../documents` root URL for
@@ -88,15 +88,14 @@ server-side transforms in a single `:commit`** instead of read-modify-write:
   `updateTime`* with `getDocWithTime`, validate sufficiency, then `updateDocIf`
   decrement via `incrementField`. A concurrent withdrawal loses the CAS and
   re-reads — no overdraft.
-- **Escrow release** (`workers/src/lib/escrow.ts` `releaseToSeller`): switches
-  the order `held → released`, credits the seller's `walletBalance` with an
+- **Escrow release** (`workers/src/lib/escrow.ts` `releaseToArtisan`): switches
+  the order `held → released`, credits the artisan's `walletBalance` with an
   `increment`, and creates the `credit` transaction — one `:commit`. It returns
   `false` (no-op) when the order is no longer `held`, so concurrent
-  double-confirms and admin force-releases credit the seller exactly once
+  double-confirms and admin force-releases credit the artisan exactly once
   (asserted by ordering test *E0*).
-- **Bid accept** (`workers/src/lib/bids.ts` `acceptBidAndReserve`): CAS `bid:
-  active → accepted` **and** `product: active → reserved` in one `:commit`; the
-  seller's accept and the buyer's withdraw race each other and exactly one
+- **Bid accept** (`workers/src/lib/bids.ts` `acceptBidAndReserve`): CAS `bid: active → accepted` **and** `product: active → reserved` in one `:commit`; the
+  artisan's accept and the buyer's withdraw race each other and exactly one
   branch wins. Re-accepts on an already-reserved product are idempotent.
 - **Offer rows** (`workers/src/routes/product-bids.ts`): bids use a
   **deterministic document id `{productId}__{buyerId}`**, so two concurrent
@@ -119,18 +118,18 @@ combinations need composite indexes created in the Firebase console.** Queries
 that require them (these must exist or the endpoints fail with a missing-index
 error):
 
-| Collection | Fields |
-| ---------- | ------ |
-| `products` | `status ASC, createdAt DESC` (feed — see README note) |
-| `products` | `sellerId ASC, createdAt DESC` (`/products/mine`) |
-| `bids` | `buyerId ASC, createdAt DESC` (`/bids/mine`) |
-| `bids` | `productId ASC, status ASC` (accept path: withdraw other offers) |
-| `orders` | `buyerId ASC, createdAt DESC` (`/orders/mine`) |
-| `orders` | `sellerId ASC, createdAt DESC` (`/orders/sales`) |
-| `orders` | `escrowStatus ASC, createdAt DESC` (admin list with status filter) |
-| `orders` | `escrowStatus ASC, deliveryDeadline ASC` (**cron**: reminder + auto-refund queries) |
-| `walletTransactions` | `userId ASC, createdAt DESC` (`/wallet`) |
-| `users` | `verificationStatus ASC, createdAt ASC` (`/admin/verifications/pending`) |
+| Collection             | Fields                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| `products`           | `status ASC, createdAt DESC` (feed — see README note)                                    |
+| `products`           | `artisanId ASC, createdAt DESC` (`/products/mine`)                                      |
+| `bids`               | `buyerId ASC, createdAt DESC` (`/bids/mine`)                                            |
+| `bids`               | `productId ASC, status ASC` (accept path: withdraw other offers)                          |
+| `orders`             | `buyerId ASC, createdAt DESC` (`/orders/mine`)                                          |
+| `orders`             | `artisanId ASC, createdAt DESC` (`/orders/sales`)                                       |
+| `orders`             | `escrowStatus ASC, createdAt DESC` (admin list with status filter)                        |
+| `orders`             | `escrowStatus ASC, deliveryDeadline ASC` (**cron**: reminder + auto-refund queries) |
+| `walletTransactions` | `userId ASC, createdAt DESC` (`/wallet`)                                                |
+| `users`              | `verificationStatus ASC, createdAt ASC` (`/admin/verifications/pending`)                |
 
 ## Caching & performance
 
@@ -147,6 +146,28 @@ error):
   in `next.config.ts`; the sell form downscales/compresses photos client-side
   (`prepareImageFile`, ~1600px WebP) before presigned upload so phone photos
   stay under the 5MB cap.
+
+## Discovery, storefronts & demo data
+
+- **Feed filtering** (`workers/src/routes/products.ts`): `GET /products` supports
+  keyword `search` (against stored `titleKeywords`), `priceMin`/`priceMax`,
+  `productType`, `tags`/`materials` (OR match, ≤10 each), `region` and `sortBy`
+  (`newest`/`price_asc`/`price_desc`). The frontend keeps this filter state in
+  `lib/exploreFilters.ts` (shared by the server page and the client feed).
+- **Public storefronts** (`workers/src/routes/artisans.ts`): `GET /artisans`
+  returns featured shops (queries `users` newest-first, keeps profiles that look
+  like a shop, ranks by rating; default 8 / max 24); `GET /artisans/{uid}`
+  returns the profile plus its active listings; `PATCH /artisans/me` lets an
+  artisan edit their own storefront fields. Only public fields leave the API.
+- **Crawlable discovery pages** (frontend): `/c/[category]` (one prerendered
+  page per craft, `CollectionPage` + `BreadcrumbList` JSON-LD), `/artisan`
+  (index) and `/artisan/[uid]` (`ProfilePage` JSON-LD). These give category and
+  shop queries real canonical URLs — filtered `/explore?category=…` stays
+  canonicalized to `/explore` so it never creates near-duplicate index pages.
+- **Demo fallback** (`frontend/lib/dummyData.ts`): when the API is unreachable or
+  a collection is empty, the homepage, `/explore` (unfiltered only), category and
+  storefront pages render self-contained demo pieces (inline SVG `data:` URIs, no
+  R2 object). Real data always wins; nothing is persisted.
 
 ## Error handling & validation
 
@@ -182,10 +203,14 @@ concurrent-same-millisecond races are reproducible. **Each suite carries its own
 copy of `firestoreMock`** — when you add a Firestore endpoint used by routes,
 extend the mocks in every suite that exercises those routes.
 
-Key race/idempotency coverage: three concurrent `releaseToSeller` calls credit
+Key race/idempotency coverage: three concurrent `releaseToArtisan` calls credit
 once (orders *E0*); concurrent first-bids collapse to one row (bids);
 concurrent bid-accepts yield exactly one success (bids); concurrent wallet
-withdrawals can't overdraft (orders section G).
+withdrawals can't overdraft (orders section G). The made-to-order passes
+exercise the full production lifecycle — customization validation, deposit
+pricing math, mark-ready for both plans, idempotent `pay-final` + final
+webhook, cancellation accept/reject with the 25% artisan split, and the 3-day
+forfeiture cron (backdated `productionStatusAt`, sections *H–H4*).
 
 ```bash
 # Frontend: lint + production build
@@ -217,7 +242,53 @@ Verification is informational — it never gates selling. It has three parts:
 ## Cron
 
 Hourly `scheduled` handler (`workers/src/index.ts`, wrangler.toml) →
-`processExpiredOrders` (`workers/src/lib/escrow.ts`): warns both parties 24h
-before a held order's delivery deadline, then auto-refunds orders still held
-past it (Paypack: immediate refund; Pesapal: refund request, finalized by their
-finance team and confirmed via `/admin/orders/:id/mark-refunded`).
+`processExpiredOrders` (`workers/src/lib/escrow.ts`). It warns both parties 24h
+before a held order's delivery deadline, auto-refunds orders still held past it
+(Paypack: immediate refund; Pesapal: refund request, finalized by their finance
+team and confirmed via `/admin/orders/:id/mark-refunded`), and **cancels deposit
+orders stuck in `awaiting_final_payment` for more than 3 days**
+(`FINAL_PAYMENT_TIMEOUT_MS`): the artisan keeps the deposit, the buyer is
+refunded the difference (no final payment was made, so there's nothing to claw
+back) and the product returns to `active`.
+
+## Made-to-order lifecycle
+
+The two axes (escrow $ vs production state) run in parallel. `escrowStatus`
+owns the money; `productionStatus` owns the work:
+
+```
+deposit plan:  create → buyer pays deposit (50% of total) → in_production
+               → mark-ready → awaiting_final_payment → pay-final (3-day limit)
+               → awaiting_delivery (5-day confirm window) → released/refunded
+
+full plan:     create → buyer pays totalPaid up front → in_production
+               → mark-ready → awaiting_delivery (5-day confirm window)
+               → released/refunded
+```
+
+- **`POST /orders`** validates `productionTimeDays` is present on the product
+  and the `customizationResponses` satisfy the product's `customizationOptions`
+  (missing required / invalid choice → 400, max 30 responses). Extra reference
+  image + request note are capped (`MAX_REFERENCE_URL` 500, `MAX_REQUEST_NOTE`
+  2000). The price math is `agreedAmount + deliveryFee + (sum of answered options' priceAdjustment)`, split 50/50 for the deposit plan.
+- **Deposit plan**: the webhook confirmation sets `depositPaid` and the order
+  to `in_production` (no `deliveryDeadline` yet — there's no rush while the
+  piece is being made). **Full plan**: the usual held + deadline path.
+- **`mark-ready`** (artisan): deposit plan → `awaiting_final_payment`;
+  full plan → `awaiting_delivery` + 5-day deadline. `pay-final` charges the
+  remaining balance and is **idempotent while the charge is in-flight**
+  (`finalPaymentReference`); the final webhook moves the order to
+  `awaiting_delivery` and starts the confirm clock. Anything that fails the
+  charge (webhook error / mismatch / reversed) clears `finalPaymentReference`
+  so the buyer can retry.
+- **Confirmations are gated on production**: `can-confirm` / `confirm-delivery`
+  refuse while the piece isn't `awaiting_delivery` (returning the pending
+  `productionStatus` / `finalPaymentPending` flags to the frontend).
+- **Cancellation** (buyer, only during `in_production`, one request per order):
+  the artisan responds `{ accept }`. On accept, escrow is split — the artisan
+  keeps **25% of the order total**, the buyer is refunded the remainder against
+  the actual debit (`deposit` was half → buyer walks with the other 25%;
+  `full` → buyer gets 75% back), the product is relisted, and each side gets a
+  `cancellation_*` notification. Reject resumes production.
+- **Forfeiture**: no final payment within 3 days → `cancelled_forfeited`, the
+  artisan keeps the deposit, product relisted (see Cron).

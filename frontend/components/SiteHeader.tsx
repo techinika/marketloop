@@ -12,7 +12,7 @@ function Wordmark({ href, children }: { href: string; children: React.ReactNode 
   return (
     <Link
       href={href}
-      className="flex items-center text-base font-semibold tracking-tight text-foreground"
+      className="heading flex items-center text-lg text-foreground"
     >
       {children}
     </Link>
@@ -44,10 +44,10 @@ function MainHeader() {
     <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur">
       <div className="container-page flex h-14 items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <Wordmark href="/">ALLSHA</Wordmark>
+          <Wordmark href="/">Handi</Wordmark>
           <nav className="ml-4 hidden items-center gap-1 md:flex">
-            <MainNavLink href="/explore">Explore</MainNavLink>
-            <MainNavLink href="/sell/new">Sell</MainNavLink>
+            <MainNavLink href="/explore">Discover</MainNavLink>
+            <MainNavLink href="/sell/new">Sell your craft</MainNavLink>
           </nav>
         </div>
 
@@ -87,14 +87,14 @@ function MainHeader() {
               onClick={() => setMobileOpen(false)}
               className="rounded-xl px-3 py-2.5 text-sm font-medium text-secondary transition-colors hover:bg-surface-muted hover:text-foreground"
             >
-              Explore
+              Discover
             </Link>
             <Link
               href="/sell/new"
               onClick={() => setMobileOpen(false)}
               className="rounded-xl px-3 py-2.5 text-sm font-medium text-secondary transition-colors hover:bg-surface-muted hover:text-foreground"
             >
-              Sell an item
+              Sell your craft
             </Link>
             <Link
               href="/dashboard"
@@ -154,7 +154,7 @@ function AdminHeader() {
     <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur">
       <div className="container-page flex h-14 items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <Wordmark href="/admin">ALLSHA Admin</Wordmark>
+          <Wordmark href="/admin">Handi Admin</Wordmark>
           <nav className="ml-4 flex items-center gap-1">
             <AdminNavLink href="/admin">Overview</AdminNavLink>
             <AdminNavLink href="/admin/orders">Orders</AdminNavLink>

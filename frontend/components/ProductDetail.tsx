@@ -16,19 +16,32 @@ import {
   reserveProduct,
   withdrawBid,
 } from "@/lib/products";
-import type { Bid, BidSummary, ProductDetail as ProductDetailData, ProductStatus } from "@/types";
+import type { Bid, BidSummary, ProductDetail as ProductDetailData, ProductStatus, ProductType } from "@/types";
 import { cn } from "@/lib/cn";
 import { useToast } from "@/components/ui/Toast";
 import { ProductDetailSkeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { RatingBadge } from "@/components/ui/Rating";
 import { RichText } from "@/components/ui/RichText";
+import { availabilityMeta } from "@/components/ExploreFeed";
 
 const STATUS_BADGE: Record<ProductStatus, { label: string; cls: string }> = {
   active: { label: "Active", cls: "badge-success" },
   reserved: { label: "Reserved", cls: "badge-warning" },
   sold: { label: "Sold", cls: "badge-neutral" },
+  sold_out: { label: "Sold out", cls: "badge-neutral" },
   removed: { label: "Removed", cls: "badge-neutral" },
+};
+
+export type ProductTypeBadge = {
+  kind: ProductType;
+  label: string;
+  cls: string;
+};
+
+const PRODUCT_TYPE_BADGE: Record<ProductType, ProductTypeBadge> = {
+  made_to_order: { kind: "made_to_order", label: "Made to order", cls: "badge-ochre" },
+  ready_to_ship: { kind: "ready_to_ship", label: "Ready to ship", cls: "badge-secondary" },
 };
 
 export function ProductDetail({
@@ -158,15 +171,33 @@ export function ProductDetail({
     setBusy(true);
     setError(null);
     try {
-      const { product, checkout } = await reserveProduct(data.product.id);
-      setData((prev) => (prev ? { ...prev, product } : prev));
-      toast({
-        title: "Reserved for you",
-        description: "The item is held for 15 minutes while you pay.",
-      });
-      router.push(
-        `/checkout/${checkout.productId}?amount=${encodeURIComponent(checkout.amount)}&currency=${encodeURIComponent(checkout.currency)}`,
-      );
+      if (data.product.productType === "ready_to_ship") {
+        // RTS: bought directly at checkout without a reservation.
+        const totalAmount =
+          data.product.priceAmount + (data.product.deliveryFee ?? 0);
+        router.push(
+          `/checkout/${data.product.id}?amount=${encodeURIComponent(
+            totalAmount,
+          )}&currency=${encodeURIComponent(data.product.priceCurrency)}`,
+        );
+        toast({
+          title: "Proceeding to checkout",
+          description: "Pay the full amount to complete your purchase.",
+        });
+      } else {
+        // MTO: reserve the item for 15 minutes while the buyer pays the deposit.
+        const { product, checkout } = await reserveProduct(data.product.id);
+        setData((prev) => (prev ? { ...prev, product } : prev));
+        toast({
+          title: "Reserved for you",
+          description: "The item is held for 15 minutes while you pay.",
+        });
+        router.push(
+          `/checkout/${checkout.productId}?amount=${encodeURIComponent(
+            checkout.amount,
+          )}&currency=${encodeURIComponent(checkout.currency)}`,
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to reserve product");
       setBusy(false);
@@ -193,21 +224,23 @@ export function ProductDetail({
     return <ProductDetailSkeleton />;
   }
 
-  const { product, seller } = data;
+  const { product, artisan } = data;
   const image = product.images[selectedImage];
-  const isOwn = user !== null && product.sellerId === user.uid;
-  const isBuyable = product.status === "active" && !product.isBiddingEnabled && !isOwn;
+  const isOwn = user !== null && product.artisanId === user.uid;
+  const isBuyable =
+    product.status === "active" && !product.isBiddingEnabled && !isOwn && product.productType !== "made_to_order";
   const isBiddable = product.status === "active" && product.isBiddingEnabled && !isOwn;
   const reservedByMe =
     product.status === "reserved" && user !== null && product.reservedBy === user.uid;
   const statusMeta = STATUS_BADGE[product.status];
+  const avail = availabilityMeta(product);
 
   return (
     <div className="container-page py-8 sm:py-12">
-      <div className="grid gap-8 lg:grid-cols-2">
-        {/* Gallery */}
+      <div className="grid gap-8 lg:grid-cols-[1.15fr_1fr] lg:gap-12">
+        {/* Gallery — the dominant element above the fold */}
         <div className="fade-in-up">
-          <div className="relative aspect-square w-full overflow-hidden card">
+          <div className="relative aspect-square w-full overflow-hidden img-warm">
             {image ? (
               <Image
                 src={mediaUrl(image)}
@@ -257,11 +290,14 @@ export function ProductDetail({
               {product.status !== "active" && (
                 <span className={cn("badge", statusMeta.cls)}>{statusMeta.label}</span>
               )}
+              {avail && <span className={cn("badge", avail.cls)}>{avail.label}</span>}
               {product.isBiddingEnabled && <span className="badge badge-info">Bidding</span>}
               {product.isNegotiable && <span className="badge badge-neutral">Negotiable</span>}
+              {product.isCustomizable && <span className="badge badge-accent">Customizable</span>}
+              {product.allowsReferenceUpload && <span className="badge badge-neutral">Reference welcome</span>}
               <span className="badge badge-neutral">{product.category}</span>
             </div>
-            <h1 className="mt-3 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+            <h1 className="heading mt-3 text-2xl text-foreground sm:text-3xl">
               {product.title}
             </h1>
             <div className="mt-2 flex items-baseline gap-3">
@@ -269,7 +305,17 @@ export function ProductDetail({
                 {formatPrice(product.priceAmount, product.priceCurrency)}
               </p>
               <p className="text-sm text-muted">asking price</p>
+              {product.productType && (
+                <span className={cn("badge", PRODUCT_TYPE_BADGE[product.productType].cls)}>
+                  {PRODUCT_TYPE_BADGE[product.productType].label}
+                </span>
+              )}
             </div>
+            {product.productionTimeDays > 0 && (
+              <p className="mt-2 text-xs text-muted">
+                Made to order · ~{product.productionTimeDays} days
+              </p>
+            )}
             {product.conditionNote && (
               <p className="mt-2 text-sm leading-6 text-secondary">{product.conditionNote}</p>
             )}
@@ -403,9 +449,9 @@ export function ProductDetail({
               {product.deliveryFee > 0 ? (
                 <>
                   {formatPrice(product.deliveryFee, product.priceCurrency)} —{" "}
-                  {product.deliveryFeePayer === "seller"
-                    ? "paid by the seller"
-                    : "paid by the buyer"}
+                  {product.deliveryFeePayer === "artisan"
+                    ? "paid by the artisan"
+                    : "paid by the customer"}
                 </>
               ) : (
                 "Free delivery"
@@ -413,11 +459,14 @@ export function ProductDetail({
             </p>
           </section>
 
-          <section className="card flex items-center gap-3 p-5">
-            {seller.photoUrl ? (
+          <Link
+            href={`/artisan/${artisan.uid}`}
+            className="card-interactive flex items-center gap-3 p-5"
+          >
+            {artisan.photoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={seller.photoUrl}
+                src={artisan.photoUrl}
                 alt=""
                 className="size-11 rounded-full border border-border"
               />
@@ -425,23 +474,26 @@ export function ProductDetail({
               <div className="size-11 rounded-full bg-accent-soft" />
             )}
             <div>
-              <p className="text-sm font-medium text-foreground">{seller.name}</p>
-              <RatingBadge avgRating={seller.avgRating} ratingCount={seller.ratingCount} className="mt-1" />
+              <p className="text-sm font-medium text-foreground">{artisan.name}</p>
+              <RatingBadge avgRating={artisan.avgRating} ratingCount={artisan.ratingCount} className="mt-1" />
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                <p className="text-xs text-muted">Seller</p>
-                {seller.verificationStatus === "verified" && (
+                <p className="text-xs text-muted">Artisan</p>
+                {artisan.verificationStatus === "verified" && (
                   <span className="badge badge-success" title="Identity document approved">
                     Verified
                   </span>
                 )}
-                {seller.phoneVerified && (
+                {artisan.phoneVerified && (
                   <span className="badge badge-neutral" title="Phone number confirmed by OTP">
                     Phone verified
                   </span>
                 )}
               </div>
             </div>
-          </section>
+            <span className="ml-auto self-center text-sm font-medium text-accent">
+              View shop
+            </span>
+          </Link>
         </div>
       </div>
     </div>

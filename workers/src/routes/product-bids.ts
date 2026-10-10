@@ -40,7 +40,7 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
   if (product.status !== "active") {
     return httpError(c, 409, "This product is no longer accepting bids");
   }
-  if (product.sellerId === user.uid) {
+  if (product.artisanId === user.uid) {
     return httpError(c, 400, "You cannot bid on your own product");
   }
   if (
@@ -71,7 +71,7 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
     });
     await createNotification(
       c.env,
-      product.sellerId,
+      product.artisanId,
       "bid_placed",
       "Offer updated on your listing",
       `${user.name ?? "A buyer"} raised their offer to ${body.amount} ${product.priceCurrency} on "${product.title}".`,
@@ -111,7 +111,7 @@ productBidRoutes.post("/:id/bids", authMiddleware, async (c) => {
   }
   await createNotification(
     c.env,
-    product.sellerId,
+    product.artisanId,
     "bid_placed",
     "New offer on your listing",
     `${user.name ?? "A buyer"} offered ${body.amount} ${product.priceCurrency} on "${product.title}".`,
@@ -163,7 +163,7 @@ productBidRoutes.get("/:id/bids/mine", authMiddleware, async (c) => {
   return c.json({ bid: mine[0] ?? null });
 });
 
-/** GET /products/:id/bids/all — seller-only, active bids + bidder info, highest first. */
+/** GET /products/:id/bids/all — artisan-only, active bids + bidder info, highest first. */
 productBidRoutes.get("/:id/bids/all", authMiddleware, async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
@@ -174,8 +174,8 @@ productBidRoutes.get("/:id/bids/all", authMiddleware, async (c) => {
   if (!product || product.status === "removed") {
     return httpError(c, 404, "Product not found");
   }
-  if (product.sellerId !== user.uid) {
-    return httpError(c, 403, "Only the seller can view bids");
+  if (product.artisanId !== user.uid) {
+    return httpError(c, 403, "Only the artisan can view bids");
   }
 
   const bids = await db.queryCollection<Bid>(collections.bids, {

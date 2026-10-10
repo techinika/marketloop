@@ -5,6 +5,7 @@ import { processExpiredOrders } from "./lib/escrow";
 import { validateEnv } from "./lib/env";
 import type { AppEnv, Env } from "./types";
 import { adminRoutes } from "./routes/admin";
+import { artisanRoutes } from "./routes/artisans";
 import { authRoutes } from "./routes/auth";
 import { bidRoutes } from "./routes/bids";
 import { mediaRoutes } from "./routes/media";
@@ -37,6 +38,7 @@ app.route("/uploads", uploadRoutes);
 app.route("/media", mediaRoutes);
 app.route("/products", productRoutes);
 app.route("/products", productBidRoutes);
+app.route("/artisans", artisanRoutes);
 app.route("/bids", bidRoutes);
 app.route("/orders", orderRoutes);
 app.route("/wallet", walletRoutes);
@@ -46,7 +48,7 @@ app.route("/notifications", notificationRoutes);
 app.route("/admin", adminRoutes);
 
 app.get("/", (c) =>
-  c.json({ name: "allsha-workers", message: "API is running" }),
+  c.json({ name: "handi-workers", message: "API is running" }),
 );
 
 export default app;

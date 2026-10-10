@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   };
   const opts = {
     method: "PUT" as const,
-    bucket: "allsha-images",
+    bucket: "handi-assets",
     key: "products/abc-123/photo.jpg",
     contentType: "image/jpeg",
     expiresInSeconds: 600,
@@ -63,7 +63,7 @@ async function main(): Promise<void> {
 
   const url = new URL(put.url);
   assert(url.host === "test-account.r2.cloudflarestorage.com", `host wrong: ${url.host}`);
-  assert(url.pathname === "/allsha-images/products/abc-123/photo.jpg", `path wrong: ${url.pathname}`);
+  assert(url.pathname === "/handi-assets/products/abc-123/photo.jpg", `path wrong: ${url.pathname}`);
   assert(url.searchParams.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256", "algorithm missing");
   assert(
     url.searchParams.get("X-Amz-Credential") === "AKIDEXAMPLE/20150830/auto/s3/aws4_request",

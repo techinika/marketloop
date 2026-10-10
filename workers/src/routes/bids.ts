@@ -21,7 +21,7 @@ async function notifyWinner(
     bid.buyerId,
     "bid_accepted",
     "Your offer was accepted!",
-    `The seller accepted your ${bid.amount} ${bid.currency} offer on "${product.title}". Head to checkout to pay.`,
+    `The artisan accepted your ${bid.amount} ${bid.currency} offer on "${product.title}". Head to checkout to pay.`,
     { orderId: null, productId: product.id },
   );
 }
@@ -84,7 +84,7 @@ bidRoutes.get("/mine", authMiddleware, async (c) => {
 
 /**
  * POST /bids/:bidId/accept
- * Seller accepts a bid: marks it "accepted", withdraws every other active bid
+ * Artisan accepts a bid: marks it "accepted", withdraws every other active bid
  * on the product, and reserves the item for the winning buyer. Returns
  * checkout info so the frontend can route the buyer to /checkout/:productId.
  */
@@ -101,8 +101,8 @@ bidRoutes.post("/:bidId/accept", authMiddleware, async (c) => {
   if (!product || product.status === "removed") {
     return httpError(c, 404, "Product not found");
   }
-  if (product.sellerId !== user.uid) {
-    return httpError(c, 403, "Only the seller can accept bids");
+  if (product.artisanId !== user.uid) {
+    return httpError(c, 403, "Only the artisan can accept bids");
   }
   if (bid.status !== "active") {
     return httpError(c, 409, "This bid is no longer active");
@@ -169,7 +169,7 @@ bidRoutes.post("/:bidId/accept", authMiddleware, async (c) => {
       other.buyerId,
       "bid_not_selected",
       "Offer not selected",
-      `The seller accepted another offer on "${product.title}", so your offer was withdrawn.`,
+      `The artisan accepted another offer on "${product.title}", so your offer was withdrawn.`,
       { orderId: null, productId: product.id },
     );
   }
